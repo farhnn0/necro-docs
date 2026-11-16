@@ -28,6 +28,8 @@ export interface IngestedWorkspaceNode extends WorkspaceNodeBase {
   kind: 'ingested';
   lastCommit: string;
   findings: string[];
+  summary: string;
+  recommendation: string;
   codeExcerpt: string;
 }
 export type WorkspaceNode = PresetWorkspaceNode | IngestedWorkspaceNode;

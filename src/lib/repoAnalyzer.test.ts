@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IngestError } from '@/lib/ingest/errors';
 import { analyzeRepository, parseGitHubUrl } from './repoAnalyzer';
 
@@ -90,6 +90,15 @@ describe('parseGitHubUrl', () => {
 });
 
 describe('analyzeRepository', () => {
+  // Unit tests never reach a real AI provider, even when keys exist in the shell environment.
+  beforeEach(() => {
+    for (const name of ['GEMINI_API_KEY', 'OPENAI_API_KEY', 'OPENCODE_MODEL', 'OPENCODE_BASE_URL', 'OPENCODE_CHAT_COMPLETIONS_URL']) vi.stubEnv(name, '');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
   it('produces the documented JSON shape from real file contents', async () => {
     const gh = fakeGitHub(SHOP);
     const result = await analyzeRepository('Acme/Shop', { token: '', fetchImpl: gh.impl });
@@ -102,7 +111,7 @@ describe('analyzeRepository', () => {
     // Tests, node_modules, config and .d.ts files are filtered out.
     expect(result.nodes.map((n) => n.path)).toEqual(['src/billing/charge.ts', 'src/lib/db.ts', 'src/server.ts']);
     for (const node of result.nodes) {
-      expect(Object.keys(node).sort()).toEqual(['code', 'findings', 'id', 'lastCommit', 'loc', 'name', 'path', 'rot', 'x', 'y']);
+      expect(Object.keys(node).sort()).toEqual(['code', 'findings', 'id', 'lastCommit', 'loc', 'name', 'path', 'recommendation', 'rot', 'summary', 'x', 'y']);
       expect(node.id).toBe(node.path);
       expect(node.rot).toBeGreaterThanOrEqual(0);
       expect(node.rot).toBeLessThanOrEqual(100);
@@ -190,6 +199,40 @@ describe('analyzeRepository', () => {
       fetchImpl: fakeGitHub(SHOP, { metaStatus: 403, metaHeaders: { 'x-ratelimit-remaining': '0' } }).impl,
     });
     await expect(limited).rejects.toMatchObject({ code: 'GITHUB_RATE_LIMIT', status: 429 });
+  });
+
+  it('merges a messy AI reply per file and keeps static text for gaps', async () => {
+    const aiCalls: { url: string; headers: Record<string, string> }[] = [];
+    // Fenced, truncated mid-object, "./" path prefix, and one entry with empty findings.
+    const reply = '```json\n{"files":[{"id":0,"path":"./src/billing/charge.ts","summary":"Charges the customer and records the ledger row.","findings":["Line 6: The catch block hides failed inserts."],"recommendation":"Rethrow from the catch at line 6."},{"path":"src/lib/db.ts","summary":"Wraps database inserts.","findings":[]},{"id":2,"summary":"cut off';
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
+      aiCalls.push({ url: String(input), headers: { ...(init?.headers as Record<string, string>) } });
+      return Response.json({ candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: reply }] } }] });
+    }) as typeof fetch);
+    vi.stubEnv('GEMINI_API_KEY', 'gem-key');
+    try {
+      const result = await analyzeRepository('Acme/Shop', { token: '', fetchImpl: fakeGitHub(SHOP).impl });
+      const byPath = Object.fromEntries(result.nodes.map((n) => [n.path, n]));
+      expect(byPath['src/billing/charge.ts'].summary).toBe('Charges the customer and records the ledger row.');
+      expect(byPath['src/billing/charge.ts'].recommendation).toBe('Rethrow from the catch at line 6.');
+      expect(byPath['src/lib/db.ts'].summary).toBe('Wraps database inserts.');
+      expect(byPath['src/lib/db.ts'].findings.length).toBeGreaterThanOrEqual(2); // static findings fill the empty list
+      expect(byPath['src/server.ts'].summary).toMatch(/^server\.ts is an entry point/); // truncated entry: static fallback
+      expect(aiCalls).toHaveLength(1);
+      expect(aiCalls[0].url).not.toContain('gem-key');
+      expect(aiCalls[0].headers['x-goog-api-key']).toBe('gem-key');
+    } finally {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('describes modules by role and exports when no AI provider is configured', async () => {
+    const result = await analyzeRepository('Acme/Shop', { token: '', fetchImpl: fakeGitHub(SHOP).impl });
+    const charge = result.nodes.find((n) => n.path === 'src/billing/charge.ts')!;
+    expect(charge.summary).toContain('exposes charge()');
+    expect(charge.summary).not.toMatch(/lines of executable code/);
+    expect(charge.recommendation).toBe('Log or rethrow the error caught at line 6 so failures reach the caller instead of disappearing.');
   });
 
   it('fails clearly when no supported source file exists', async () => {

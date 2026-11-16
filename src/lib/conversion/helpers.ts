@@ -13,7 +13,7 @@ import type {
 } from './types';
 import { isPresetId } from './specimens';
 
-export type RotScoreTier = 'crimson' | 'ink';
+export type RotScoreTier = 'crimson' | 'amber' | 'emerald' | 'ink';
 export type WorkspaceTarget =
   | { kind: 'preset'; id: PresetId }
   | { kind: 'repository'; repository: string }
@@ -25,7 +25,53 @@ export function scrollyStep(progress: number): 1 | 2 | 3 | 4 {
 }
 
 export function rotScoreTier(score: number): RotScoreTier {
-  return score >= 75 ? 'crimson' : 'ink';
+  if (score >= 70) return 'crimson';
+  if (score >= 40) return 'amber';
+  return 'emerald';
+}
+
+export interface RotScoreMeta {
+  tier: RotScoreTier;
+  label: string;
+  badgeClass: string;
+  solidBadgeClass: string;
+  textClass: string;
+  dotClass: string;
+  borderClass: string;
+}
+
+export function rotScoreMeta(score: number): RotScoreMeta {
+  if (score >= 70) {
+    return {
+      tier: 'crimson',
+      label: 'CRITICAL',
+      badgeClass: 'bg-crimson/10 text-crimson border-crimson/30',
+      solidBadgeClass: 'bg-crimson text-white',
+      textClass: 'text-crimson',
+      dotClass: 'bg-crimson',
+      borderClass: 'border-l-crimson',
+    };
+  }
+  if (score >= 40) {
+    return {
+      tier: 'amber',
+      label: 'WARNING',
+      badgeClass: 'bg-amber/10 text-amber border-amber/30',
+      solidBadgeClass: 'bg-amber text-white',
+      textClass: 'text-amber',
+      dotClass: 'bg-amber',
+      borderClass: 'border-l-amber',
+    };
+  }
+  return {
+    tier: 'emerald',
+    label: 'HEALTHY',
+    badgeClass: 'bg-emerald/10 text-emerald border-emerald/30',
+    solidBadgeClass: 'bg-emerald text-white',
+    textClass: 'text-emerald',
+    dotClass: 'bg-emerald',
+    borderClass: 'border-l-emerald',
+  };
 }
 
 export function resolveWorkspaceTarget(input: { repo?: string | null; specimen?: string | null }): WorkspaceTarget {
@@ -66,6 +112,8 @@ export function convertRepoAnalysis(analysis: RepoAnalysis): IngestedSpecimen {
       position: { x: node.x, y: node.y },
       lastCommit: node.lastCommit,
       findings: node.findings,
+      summary: node.summary,
+      recommendation: node.recommendation,
       codeExcerpt: node.code,
     })),
     edges: analysis.edges

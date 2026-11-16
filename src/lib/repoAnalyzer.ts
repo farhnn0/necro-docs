@@ -34,6 +34,8 @@ export interface RepoNode {
   x: number;
   y: number;
   findings: string[];
+  summary: string;
+  recommendation: string;
   code: string;
 }
 
@@ -68,8 +70,8 @@ const SNIPPET_LINES = 40;
 const LONG_FUNCTION_LINES = 60;
 const RAW_HOST = 'https://raw.githubusercontent.com';
 const COLUMN_X = [110, 390, 670, 950] as const;
-const ROW_TOP = 80;
-const ROW_GAP = 130;
+const ROW_TOP = 90;
+const ROW_GAP = 155;
 
 const EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.py', '.go'] as const;
 const EXCLUDED_DIRS = new Set(['node_modules', '.next', 'dist', 'build', 'vendor', '.git', '__pycache__', '__tests__', 'tests', 'test']);
@@ -692,8 +694,394 @@ function snippet(f: Scanned, anchor: number | null): string {
 }
 
 // ============================================================================
-// Entry point
+// Optional batch explanation
 // ============================================================================
+
+interface Explanation {
+  summary: string;
+  findings: string[];
+  recommendation: string;
+}
+
+/** Path-based role hints. First match wins, so specific folders come before generic ones. */
+const ROLE_RULES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/(?:^|\/)controllers?\/|\.controller\.[^/]+$/i, 'HTTP controller'],
+  [/(?:^|\/)(?:routes?|routers?)\/|\.routes?\.[^/]+$/i, 'route definition'],
+  [/(?:^|\/)middlewares?\/|\.middleware\.[^/]+$/i, 'middleware'],
+  [/(?:^|\/)(?:models?|schemas?|entities)\/|\.(?:model|schema|entity)\.[^/]+$/i, 'data model'],
+  [/(?:^|\/)services?\/|\.service\.[^/]+$/i, 'service'],
+  [/(?:^|\/)(?:stores?|slices?|redux)\/|\.(?:store|slice)\.[^/]+$/i, 'state store'],
+  [/(?:^|\/)hooks?\/|(?:^|\/)use[A-Z]\w*\.[jt]sx?$/, 'React hook'],
+  [/(?:^|\/)(?:pages|views|screens)\//i, 'page view'],
+  [/(?:^|\/)components?\//i, 'UI component'],
+  [/(?:^|\/)(?:config|configs|settings)\/|(?:^|\/)config\.[^/]+$/i, 'configuration module'],
+  [/(?:^|\/)(?:utils?|helpers?|lib)\//i, 'utility module'],
+  [/(?:^|\/)(?:index|main|server|app)\.[^/]+$/i, 'entry point'],
+];
+
+function roleOf(path: string): string {
+  return ROLE_RULES.find(([re]) => re.test(path))?.[1] ?? 'module';
+}
+
+/** Public symbols a file exposes; used to describe what it offers to the rest of the codebase. */
+function exportedNames(f: Scanned): string[] {
+  const names = new Set<string>();
+  const add = (name?: string) => {
+    const n = name?.trim();
+    if (n && n !== 'default' && /^[A-Za-z_$][\w$]*$/.test(n)) names.add(n);
+  };
+  const text = f.codeText;
+  if (f.lang === 'js') {
+    for (const m of text.matchAll(/\bexport\s+(?:default\s+)?(?:async\s+)?(?:function\*?|class|const|let|var|interface|type|enum)\s+([A-Za-z_$][\w$]*)/g)) add(m[1]);
+    for (const m of text.matchAll(/\b(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=/g)) add(m[1]);
+    for (const m of text.matchAll(/\bmodule\.exports\s*=\s*\{([^}]*)\}/g)) m[1].split(',').forEach((part) => add(part.split(':')[0]));
+    for (const m of text.matchAll(/\bexport\s*\{([^}]*)\}/g)) m[1].split(',').forEach((part) => add(part.trim().split(/\s+as\s+/).pop()));
+    add(/\bmodule\.exports\s*=\s*([A-Za-z_$][\w$]*)\s*;?\s*$/m.exec(text)?.[1]);
+    add(/\bexport\s+default\s+([A-Za-z_$][\w$]*)\s*;?\s*$/m.exec(text)?.[1]);
+  } else if (f.lang === 'py') {
+    for (const m of text.matchAll(/^(?:async\s+)?def\s+([A-Za-z]\w*)|^class\s+([A-Za-z]\w*)/gm)) add(m[1] ?? m[2]);
+  } else {
+    for (const m of text.matchAll(/^func\s+(?:\([^)]*\)\s*)?([A-Z]\w*)/gm)) add(m[1]);
+  }
+  return [...names];
+}
+
+function listNames(names: string[], max = 3): string {
+  const shown = names.slice(0, max).map((n) => `${n}()`);
+  if (names.length > max) return `${shown.join(', ')} and ${names.length - max} more`;
+  return shown.length > 1 ? `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}` : shown[0] ?? '';
+}
+
+const RECOMMENDATIONS: Record<number, (line: number | null) => string> = {
+  100: (l) => `Log or rethrow the error caught at line ${l} so failures reach the caller instead of disappearing.`,
+  90: (l) => `Replace the eval() call at line ${l} with explicit parsing or a lookup table.`,
+  85: (l) => `Remove the type-check suppression at line ${l} and fix the underlying type error.`,
+  80: (l) => `Replace the \`any\` types starting at line ${l} with concrete types or interfaces.`,
+  70: (l) => `Resolve the debt comment at line ${l}, or move it into a tracked issue, before changing this module.`,
+  60: (l) => `Split the long function at line ${l} into smaller helpers, each with a focused test.`,
+  50: (l) => `Flatten the nesting at line ${l} with early returns or extracted functions.`,
+  40: () => 'Extract the branching logic into small, well-named functions to lower cyclomatic complexity.',
+};
+
+/** Deterministic explanation used when no AI provider is configured, or when it fails. */
+function fallbackExplanation(f: Scanned, degree: { in: number; out: number }, score: number): Explanation {
+  const role = roleOf(f.path);
+  const dir = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : 'the repository root';
+  const names = exportedNames(f);
+  const article = /^[aeiou]/i.test(role) ? 'an' : 'a';
+  const exposes = names.length ? ` that exposes ${listNames(names)}` : '';
+  const reach =
+    degree.in > 0
+      ? `${degree.in} indexed file${degree.in === 1 ? ' imports' : 's import'} it, so changes here propagate to ${degree.in === 1 ? 'that caller' : 'those callers'}.`
+      : degree.out > 0
+        ? `It builds on ${degree.out} indexed module${degree.out === 1 ? '' : 's'}, and nothing in this analysis imports it.`
+        : 'It has no import relationships with the other analyzed files.';
+  const summary = `${f.name} is ${article} ${role} in ${dir}${exposes}. ${reach}`;
+
+  const density = f.loc ? f.branches / f.loc : 0;
+  const level = density < 0.08 ? 'low' : density < 0.18 ? 'moderate' : 'high';
+  const complexity = `Branching complexity is ${level}: ${f.branches} decision point${f.branches === 1 ? '' : 's'} across ${f.loc} executable lines, nested up to ${f.depth} level${f.depth === 1 ? '' : 's'} deep.`;
+  const ranked = [...f.issues].sort((a, b) => b.severity - a.severity || (a.line ?? 0) - (b.line ?? 0));
+  const findings = ranked.slice(0, 3).map((issue) => issue.text);
+  if (findings.length === 0) findings.push('No swallowed errors, eval() calls, type suppressions, or debt comments were detected.');
+  if (findings.length < 2) findings.push(complexity);
+
+  const top = ranked[0];
+  const recommendation = top
+    ? (RECOMMENDATIONS[top.severity] ?? RECOMMENDATIONS[40])(top.line)
+    : degree.in > 3
+      ? `Keep the exported contract of ${f.name} stable and add contract tests before changing it, because ${degree.in} files depend on it.`
+      : score < 30
+        ? `No change is needed now; cover ${names.length ? listNames(names, 2) : `${f.name}'s main behavior`} with tests before refactoring.`
+        : `Add focused tests around ${f.name} before refactoring its branching logic.`;
+  return { summary, findings, recommendation };
+}
+
+function snippetStart(total: number, anchor: number | null): number {
+  const start = anchor !== null ? Math.max(1, anchor - 12) : 1;
+  const end = Math.min(total, start + SNIPPET_LINES - 1);
+  return Math.max(1, Math.min(start, end - SNIPPET_LINES + 1));
+}
+
+/** Numbered source evidence for the model: the file header plus the window around the top finding. */
+function numberedEvidence(f: Scanned): string {
+  const anchor = [...f.issues].sort((a, b) => b.severity - a.severity).find((issue) => issue.line !== null)?.line ?? null;
+  const start = snippetStart(f.lines.length, anchor);
+  const fmt = (from: number, count: number) =>
+    f.lines
+      .slice(from - 1, from - 1 + count)
+      .map((line, i) => `${from + i}| ${line.length > 160 ? `${line.slice(0, 160)}…` : line}`)
+      .join('\n');
+  return start > 20 ? `${fmt(1, 20)}\n…\n${fmt(start, SNIPPET_LINES)}` : fmt(1, start - 1 + SNIPPET_LINES);
+}
+
+interface ExplanationInput {
+  path: string;
+  role: string;
+  exports: string[];
+  imports: string[];
+  importedBy: string[];
+  loc: number;
+  branches: number;
+  nestingDepth: number;
+  rot: number;
+  staticFindings: string[];
+  code: string;
+}
+
+const AI_TIMEOUT_MS = 35_000;
+const DEFAULT_AI_BATCH_SIZE = 8;
+
+function explanationPrompt(files: ExplanationInput[], language: string): string {
+  return [
+    'You are a senior software architect writing an autopsy of an inherited codebase for engineers who must change it safely.',
+    'For every file below, use ONLY the evidence given: path, role hint, exported symbols, imports, dependents, metrics, static findings, and numbered source lines.',
+    'Return JSON shaped exactly as {"files":[{"id":0,"summary":"...","findings":["..."],"recommendation":"..."}]} with one entry per input file and the same ids.',
+    '- summary: 1-2 sentences on what the module does in this application and what depends on it. Name concrete responsibilities (for example "validates the JWT before a movie rating is saved"), never line counts.',
+    '- findings: 2-3 specific observations about weaknesses, security gaps, or error handling. Start each with "Line N:" or "Line N-M:" when the numbered source supports it, and only cite lines you can see. If the file is healthy, say concretely what it does well.',
+    '- recommendation: one concrete, actionable fix that names the function or line it applies to.',
+    '- Do not invent frameworks, endpoints, data, or vulnerabilities the evidence does not show. Do not restate raw metrics as findings.',
+    `- Write summary, findings, and recommendation in ${language}.`,
+    '',
+    `FILES:\n${JSON.stringify(files.map((file, id) => ({ id, ...file })))}`,
+  ].join('\n');
+}
+
+const GEMINI_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    files: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          id: { type: 'INTEGER' },
+          summary: { type: 'STRING' },
+          findings: { type: 'ARRAY', items: { type: 'STRING' } },
+          recommendation: { type: 'STRING' },
+        },
+        required: ['id', 'summary', 'findings', 'recommendation'],
+      },
+    },
+  },
+  required: ['files'],
+} as const;
+
+/** Complete objects inside the first JSON array, so a truncated reply still yields the files it finished. */
+function salvageObjects(text: string): unknown[] {
+  const open = text.indexOf('[');
+  if (open < 0) return [];
+  const out: unknown[] = [];
+  let depth = 0;
+  let objectStart = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = open + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') {
+      if (depth === 0) objectStart = i;
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0 && objectStart >= 0) {
+        try {
+          out.push(JSON.parse(text.slice(objectStart, i + 1)));
+        } catch {
+          /* skip a malformed entry, keep the rest */
+        }
+        objectStart = -1;
+      }
+    } else if (ch === ']' && depth === 0) break;
+  }
+  return out;
+}
+
+/** Accepts plain JSON, fenced JSON, a bare array, or a truncated reply. */
+function parseExplanationRows(text: string): unknown[] {
+  const fenced = /```(?:json)?\s*([\s\S]*?)(?:```|$)/i.exec(text);
+  const body = fenced ? fenced[1] : text;
+  const start = body.search(/[{[]/);
+  const json = start >= 0 ? body.slice(start) : body;
+  try {
+    const value: unknown = JSON.parse(json);
+    if (Array.isArray(value)) return value;
+    const files = value !== null && typeof value === 'object' ? (value as Record<string, unknown>).files : undefined;
+    if (Array.isArray(files)) return files;
+  } catch {
+    /* fall through to salvage */
+  }
+  return salvageObjects(json);
+}
+
+function cleanText(value: unknown, max: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.replace(/\s+/g, ' ').trim();
+  return text ? text.slice(0, max) : undefined;
+}
+
+const normalizePath = (path: string) => path.replace(/\\/g, '/').replace(/^\.?\/+/, '').trim().toLowerCase();
+
+/** Prefer a path match (models occasionally renumber ids), then fall back to the id. */
+function matchInput(item: Record<string, unknown>, inputs: ExplanationInput[]): ExplanationInput | undefined {
+  const raw = item.path ?? item.file ?? item.filePath;
+  if (typeof raw === 'string' && raw.trim()) {
+    const wanted = normalizePath(raw);
+    const byPath =
+      inputs.find((input) => normalizePath(input.path) === wanted) ??
+      inputs.find((input) => normalizePath(input.path).endsWith(`/${wanted}`) || wanted.endsWith(`/${normalizePath(input.path)}`));
+    if (byPath) return byPath;
+  }
+  const id = typeof item.id === 'number' ? item.id : typeof item.id === 'string' && /^\d+$/.test(item.id) ? Number(item.id) : NaN;
+  return Number.isInteger(id) ? inputs[id] : undefined;
+}
+
+function toPartialExplanation(item: Record<string, unknown>): Partial<Explanation> {
+  const rawFindings = Array.isArray(item.findings) ? item.findings : typeof item.findings === 'string' ? [item.findings] : [];
+  const findings = rawFindings
+    .map((finding) =>
+      cleanText(
+        typeof finding === 'object' && finding !== null
+          ? ((finding as Record<string, unknown>).text ?? (finding as Record<string, unknown>).description ?? (finding as Record<string, unknown>).finding)
+          : finding,
+        400,
+      ),
+    )
+    .filter((finding): finding is string => Boolean(finding))
+    .slice(0, 4);
+  return {
+    summary: cleanText(item.summary ?? item.purpose, 600),
+    findings: findings.length ? findings : undefined,
+    recommendation: cleanText(item.recommendation ?? item.recommendedAction, 500),
+  };
+}
+
+type ProviderCall = (prompt: string, signal: AbortSignal) => Promise<string>;
+
+async function chatCompletion(url: string, key: string | undefined, model: string, prompt: string, signal: AbortSignal): Promise<string> {
+  const send = (structured: boolean) =>
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) },
+      signal,
+      body: JSON.stringify({
+        model,
+        temperature: 0.2,
+        ...(structured ? { response_format: { type: 'json_object' } } : {}),
+        messages: [
+          { role: 'system', content: 'You return only valid JSON, with no prose and no code fences.' },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    });
+  let response = await send(true);
+  // Some OpenAI-compatible gateways reject response_format; the parser copes with plain text.
+  if (response.status === 400) response = await send(false);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  const text = payload.choices?.[0]?.message?.content;
+  if (!text) throw new Error('empty response');
+  return text;
+}
+
+async function geminiCompletion(key: string, model: string, prompt: string, signal: AbortSignal): Promise<string> {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    method: 'POST',
+    // Header, not query string, so the key never shows up in URLs or error messages.
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+    signal,
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: GEMINI_SCHEMA,
+        temperature: 0.2,
+        maxOutputTokens: 8192,
+        // Thinking tokens add latency and eat the output budget; this task does not need them.
+        ...(/gemini-2\.5-flash/i.test(model) ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+      },
+    }),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const payload = (await response.json()) as {
+    candidates?: Array<{ finishReason?: string; content?: { parts?: Array<{ text?: string; thought?: boolean }> } }>;
+  };
+  const candidate = payload.candidates?.[0];
+  const text = (candidate?.content?.parts ?? []).filter((part) => !part.thought && part.text).map((part) => part.text).join('');
+  if (!text) throw new Error(`empty response (${candidate?.finishReason ?? 'no candidate'})`);
+  return text;
+}
+
+/** First configured provider: OpenCode-compatible endpoint, then Gemini, then OpenAI. */
+function configuredProvider(): { name: string; call: ProviderCall } | null {
+  const env = (name: string) => process.env[name]?.trim() || undefined;
+  const opencodeModel = env('OPENCODE_MODEL');
+  const opencodeBase = env('OPENCODE_BASE_URL');
+  const opencodeUrl = env('OPENCODE_CHAT_COMPLETIONS_URL') ?? (opencodeBase ? `${opencodeBase.replace(/\/+$/, '')}/chat/completions` : undefined);
+  if (opencodeUrl && opencodeModel) {
+    const key = env('OPENCODE_API_KEY');
+    return { name: `opencode/${opencodeModel}`, call: (prompt, signal) => chatCompletion(opencodeUrl, key, opencodeModel, prompt, signal) };
+  }
+  const geminiKey = env('GEMINI_API_KEY');
+  if (geminiKey) {
+    const model = env('GEMINI_MODEL') ?? 'gemini-2.5-flash';
+    return { name: `gemini/${model}`, call: (prompt, signal) => geminiCompletion(geminiKey, model, prompt, signal) };
+  }
+  const openAiKey = env('OPENAI_API_KEY');
+  if (openAiKey) {
+    const model = env('OPENAI_MODEL') ?? 'gpt-4o-mini';
+    return { name: `openai/${model}`, call: (prompt, signal) => chatCompletion('https://api.openai.com/v1/chat/completions', openAiKey, model, prompt, signal) };
+  }
+  return null;
+}
+
+/**
+ * AI explanations keyed by file path. Files are sent in parallel batches so one slow or truncated
+ * reply only affects its own batch. Missing fields fall back to the static explanation per file.
+ */
+async function requestBatchExplanation(inputs: ExplanationInput[], signal: AbortSignal): Promise<Map<string, Partial<Explanation>> | null> {
+  const provider = configuredProvider();
+  if (!provider || inputs.length === 0) return null;
+  const language = process.env.AI_EXPLANATION_LANGUAGE?.trim() || 'English';
+  const size = Math.max(1, Math.min(22, Number(process.env.AI_BATCH_SIZE) || DEFAULT_AI_BATCH_SIZE));
+  const aiSignal = AbortSignal.any([signal, AbortSignal.timeout(AI_TIMEOUT_MS)]);
+  const batches: ExplanationInput[][] = [];
+  for (let i = 0; i < inputs.length; i += size) batches.push(inputs.slice(i, i + size));
+
+  const results = await Promise.allSettled(
+    batches.map(async (batch) => {
+      const rows = parseExplanationRows(await provider.call(explanationPrompt(batch, language), aiSignal));
+      const explained = new Map<string, Partial<Explanation>>();
+      for (const row of rows) {
+        if (row === null || typeof row !== 'object') continue;
+        const input = matchInput(row as Record<string, unknown>, batch);
+        if (input) explained.set(input.path, toPartialExplanation(row as Record<string, unknown>));
+      }
+      return explained;
+    }),
+  );
+
+  const merged = new Map<string, Partial<Explanation>>();
+  results.forEach((result, i) => {
+    if (result.status === 'fulfilled') {
+      result.value.forEach((value, path) => merged.set(path, value));
+      if (result.value.size < batches[i].length) {
+        console.warn(`[ingest] ${provider.name} explained ${result.value.size}/${batches[i].length} files in batch ${i + 1}; the rest use static analysis.`);
+      }
+    } else {
+      const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      console.warn(`[ingest] ${provider.name} batch ${i + 1}/${batches.length} failed (${reason}); using static analysis for it.`);
+    }
+  });
+  return merged;
+}
+
 
 export async function analyzeRepository(repoUrl: string, options: AnalyzeOptions = {}): Promise<RepoAnalysis> {
   const { owner, repo } = parseGitHubUrl(repoUrl);
@@ -747,32 +1135,55 @@ export async function analyzeRepository(repoUrl: string, options: AnalyzeOptions
   }
   const positions = layout(files, edges);
 
-  const nodes: RepoNode[] = files
-    .map((f): RepoNode => {
+  const staticNodes: Array<RepoNode & { staticFindings: string[] }> = files
+    .map((f): RepoNode & { staticFindings: string[] } => {
       const d = degree.get(f.path)!;
+      const score = rotScore(f, d.in + d.out);
       const ranked = [...f.issues].sort((a, b) => b.severity - a.severity || (a.line ?? 0) - (b.line ?? 0));
-      const findings = ranked.slice(0, 4).map((issue) => issue.text);
+      const staticFindings = ranked.slice(0, 4).map((issue) => issue.text);
       const facts = [
-        `${f.loc} LOC with ${f.branches} branches and a maximum nesting depth of ${f.depth}.`,
-        `Imports ${d.out} and is imported by ${d.in} file${d.in === 1 ? '' : 's'} in this analysis.`,
+        `${f.loc} executable lines with ${f.branches} decision points and a maximum nesting depth of ${f.depth}.`,
+        `Imports ${d.out} module${d.out === 1 ? '' : 's'} and is imported by ${d.in} file${d.in === 1 ? '' : 's'} in this analysis.`,
       ];
-      for (let i = 0; findings.length < 2 && i < facts.length; i++) findings.push(facts[i]);
+      for (let i = 0; staticFindings.length < 2 && i < facts.length; i++) staticFindings.push(facts[i]);
       const anchor = ranked.find((issue) => issue.line !== null)?.line ?? null;
       const { x, y } = positions.get(f.path)!;
+      const fallback = fallbackExplanation(f, d, score);
       return {
-        id: f.path,
-        name: f.name,
-        path: f.path,
-        loc: f.loc,
-        rot: rotScore(f, d.in + d.out),
-        lastCommit: 'Active branch',
-        x,
-        y,
-        findings,
-        code: snippet(f, anchor),
+        id: f.path, name: f.name, path: f.path, loc: f.loc, rot: score,
+        lastCommit: 'Active branch', x, y, findings: fallback.findings,
+        summary: fallback.summary, recommendation: fallback.recommendation,
+        code: f.lines.join('\n'), staticFindings,
       };
-    })
-    .sort((a, b) => (a.path < b.path ? -1 : 1));
+    });
+
+  const byPath = new Map(files.map((f) => [f.path, f]));
+  const explanations = await requestBatchExplanation(
+    staticNodes.map((node): ExplanationInput => {
+      const f = byPath.get(node.path)!;
+      return {
+        path: node.path,
+        role: roleOf(node.path),
+        exports: exportedNames(f).slice(0, 12),
+        imports: edges.filter((e) => e.from === node.path).map((e) => e.to),
+        importedBy: edges.filter((e) => e.to === node.path).map((e) => e.from),
+        loc: f.loc,
+        branches: f.branches,
+        nestingDepth: f.depth,
+        rot: node.rot,
+        staticFindings: node.staticFindings,
+        code: numberedEvidence(f),
+      };
+    }),
+    ctx.signal,
+  );
+  // Per field: whatever the model returned wins, the static explanation fills any gap.
+  const nodes: RepoNode[] = staticNodes.map(({ staticFindings: _staticFindings, ...node }) => {
+    const ai = explanations?.get(node.path);
+    return ai
+      ? { ...node, summary: ai.summary ?? node.summary, findings: ai.findings ?? node.findings, recommendation: ai.recommendation ?? node.recommendation }
+      : node;
+  }).sort((a, b) => (a.path < b.path ? -1 : 1));
 
   const weight = nodes.reduce((sum, n) => sum + Math.max(n.loc, 1), 0);
   const overallRot = Math.round(nodes.reduce((sum, n) => sum + n.rot * Math.max(n.loc, 1), 0) / weight);
