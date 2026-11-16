@@ -12,7 +12,7 @@ export class IngestError extends Error {
   ) {
     super(message);
     this.name = 'IngestError';
-    this.status = INGEST_ERROR_STATUS[code];
+    this.status = (INGEST_ERROR_STATUS as any)[code] || 500;
   }
 }
 

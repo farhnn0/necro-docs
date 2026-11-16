@@ -1,0 +1,1347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Necro-Docs — Codebase Autopsy & Voice Interrogation</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            canvas: '#FFFFFF',
+            surface: '#F6F7F9',
+            ink: '#111113',
+            muted: '#686A72',
+            hairline: '#E8E9ED',
+            skyAccent: '#0284C7',
+            crimson: '#E11D48',
+            amber: '#D97706',
+            emerald: '#059669'
+          },
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+            display: ['"Plus Jakarta Sans"', 'sans-serif'],
+            serif: ['"Instrument Serif"', 'serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      background-color: #FFFFFF;
+      color: #111113;
+      -webkit-font-smoothing: antialiased;
+      margin: 0;
+    }
+
+    .acctual-window {
+      border: 1px solid #E8E9ED;
+      box-shadow: 0 24px 60px -15px rgba(17, 17, 19, 0.08), 0 4px 16px -2px rgba(17, 17, 19, 0.03);
+    }
+
+    .paper-grid {
+      background-color: #FFFFFF;
+      background-image: radial-gradient(#D4D4D8 1px, transparent 1px);
+      background-size: 22px 22px;
+    }
+
+    /* Sticky Scrollytelling Motion System */
+    .scrolly-stage-layer {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      transform: translateY(28px) scale(0.965);
+      filter: blur(4px);
+      pointer-events: none;
+      transition: opacity 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+                  transform 0.75s cubic-bezier(0.22, 1, 0.36, 1),
+                  filter 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .scrolly-stage-layer.is-active {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      filter: blur(0px);
+      pointer-events: auto;
+    }
+
+    .scrolly-stagger {
+      opacity: 0;
+      transform: translateY(14px);
+      transition: opacity 0.55s cubic-bezier(0.22, 1, 0.36, 1),
+                  transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .is-active .scrolly-stagger {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .is-active .scrolly-delay-1 { transition-delay: 0.08s; }
+    .is-active .scrolly-delay-2 { transition-delay: 0.16s; }
+    .is-active .scrolly-delay-3 { transition-delay: 0.24s; }
+    .is-active .scrolly-delay-4 { transition-delay: 0.32s; }
+
+    .scrolly-nav-item {
+      opacity: 0.34;
+      transform: translateX(0);
+      transition: opacity 0.45s ease,
+                  transform 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+                  border-color 0.45s ease;
+    }
+    .scrolly-nav-item.is-active {
+      opacity: 1;
+      transform: translateX(8px);
+    }
+
+    .draw-wire {
+      stroke-dasharray: 220;
+      stroke-dashoffset: 220;
+      transition: stroke-dashoffset 1s cubic-bezier(0.22, 1, 0.36, 1) 0.15s;
+    }
+    .is-active .draw-wire {
+      stroke-dashoffset: 0;
+    }
+
+    .node-card {
+      position: absolute;
+      width: 226px;
+      background: #FFFFFF;
+      border: 1px solid #E8E9ED;
+      border-radius: 16px;
+      padding: 14px 16px;
+      cursor: pointer;
+      transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, opacity 0.25s ease;
+      box-shadow: 0 4px 16px rgba(17, 17, 19, 0.03);
+      user-select: none;
+    }
+    .node-card:hover {
+      border-color: #111113;
+      transform: translateY(-2px);
+    }
+    .node-card.is-selected {
+      border-color: #111113;
+      box-shadow: 0 0 0 2px rgba(17, 17, 19, 0.12), 0 12px 28px rgba(17, 17, 19, 0.08);
+    }
+    .node-card.is-spotlight {
+      border-color: #0284C7;
+      box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.15), 0 12px 28px rgba(2, 132, 199, 0.08);
+    }
+    .node-card.is-dimmed {
+      opacity: 0.22;
+    }
+
+    @keyframes wavePulse {
+      0%, 100% { transform: scaleY(0.35); }
+      50% { transform: scaleY(1); }
+    }
+    .wave-bar {
+      transform-origin: center;
+      transition: transform 0.15s ease;
+    }
+    .is-speaking .wave-bar {
+      animation: wavePulse 0.55s ease-in-out infinite;
+    }
+  </style>
+</head>
+<body class="font-sans text-ink bg-canvas">
+
+  <!-- ==================== VIEW 1: LANDING PAGE ==================== -->
+  <div id="view-landing" class="min-h-screen flex flex-col">
+
+    <!-- Top Navigation -->
+    <header class="w-full max-w-6xl mx-auto px-6 h-20 flex items-center justify-between">
+      <a href="#" class="font-display font-bold text-lg tracking-tight text-ink">Necro-Docs</a>
+      <nav class="hidden md:flex items-center gap-8 text-sm text-muted">
+        <a href="#live-walkthrough" class="hover:text-ink transition-colors">Workflow</a>
+        <a href="#capabilities" class="hover:text-ink transition-colors">Capabilities</a>
+        <a href="#stages" class="hover:text-ink transition-colors">Architecture</a>
+      </nav>
+      <div class="flex items-center gap-3">
+        <button onclick="loadPreset('payment')" class="px-4 py-2 rounded-full bg-ink text-white text-xs font-medium hover:bg-neutral-800 transition-colors cursor-pointer">
+          Launch canvas
+        </button>
+      </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="relative pt-10 pb-24 px-6 overflow-hidden">
+      <div class="max-w-4xl mx-auto text-center">
+        <p class="text-xs font-semibold text-skyAccent mb-3">Automated codebase archaeology</p>
+        <h1 class="font-display text-4xl sm:text-6xl font-bold tracking-tight text-ink leading-[1.08]">
+          Dissect legacy codebases<br />in minutes
+        </h1>
+        <p class="mt-4 text-base sm:text-lg text-muted max-w-xl mx-auto leading-relaxed">
+          Map hidden module dependencies, surface structural decay scores, and interrogate fragile logic by voice before refactoring a single line.
+        </p>
+
+        <!-- Repository Input Bar -->
+        <form onsubmit="handleCustomRepo(event)" class="mt-8 max-w-xl mx-auto flex flex-col sm:flex-row items-center gap-2 p-1.5 rounded-full border border-hairline bg-surface">
+          <input
+            id="repo-url-input"
+            type="text"
+            placeholder="github.com/acme-corp/legacy-payment-monolith"
+            class="w-full flex-1 bg-transparent px-4 py-2 text-sm font-mono text-ink placeholder:text-muted/70 focus:outline-none"
+          />
+          <button
+            type="submit"
+            class="w-full sm:w-auto px-6 py-2.5 rounded-full bg-ink hover:bg-neutral-800 text-white text-xs font-semibold transition-colors cursor-pointer shrink-0"
+          >
+            Audit repository
+          </button>
+        </form>
+
+        <!-- 3 Clean Feature Pillars -->
+        <div class="mt-7 flex flex-wrap items-center justify-center gap-6 sm:gap-10 text-xs font-medium text-muted">
+          <span class="flex items-center gap-2"><i data-lucide="git-fork" class="w-3.5 h-3.5 text-ink"></i> Zero-clone GitHub tree scan</span>
+          <span class="flex items-center gap-2"><i data-lucide="activity" class="w-3.5 h-3.5 text-ink"></i> File-level code-rot scoring</span>
+          <span class="flex items-center gap-2"><i data-lucide="mic" class="w-3.5 h-3.5 text-ink"></i> Voice blast-radius queries</span>
+        </div>
+      </div>
+
+      <!-- Elevated Product Window Flanked by Tilted Code Sheets -->
+      <div class="relative max-w-5xl mx-auto mt-14">
+        <!-- Left Tilted Code Sheet -->
+        <div class="hidden lg:block absolute -left-14 top-10 w-64 p-5 rounded-2xl bg-surface border border-hairline -rotate-6 opacity-80 pointer-events-none font-mono text-[10px] text-muted leading-relaxed">
+          <div class="text-ink font-semibold mb-2">src/middleware/authGuard.ts</div>
+          <div>export async function verifySession(req) {</div>
+          <div class="pl-3">const raw = req.headers['x-legacy'];</div>
+          <div class="pl-3">if (!raw) return fallbackGuest();</div>
+          <div class="pl-3 text-crimson">// TODO: remove bypass before v2</div>
+          <div class="pl-3">return decodeUnsafe(raw);</div>
+          <div>}</div>
+        </div>
+
+        <!-- Right Tilted Code Sheet -->
+        <div class="hidden lg:block absolute -right-14 top-12 w-64 p-5 rounded-2xl bg-surface border border-hairline rotate-6 opacity-80 pointer-events-none font-mono text-[10px] text-muted leading-relaxed">
+          <div class="text-ink font-semibold mb-2">src/storage/dbLedger.ts</div>
+          <div>export async function forceInsert(tx) {</div>
+          <div class="pl-3">await pool.query('BEGIN');</div>
+          <div class="pl-3 text-amber">// No idempotency check</div>
+          <div class="pl-3">return pool.query(SQL_WRITE, [tx]);</div>
+          <div>}</div>
+        </div>
+
+        <!-- Main Elevated Product Window -->
+        <div class="relative z-10 acctual-window rounded-3xl bg-white p-6 sm:p-8 max-w-3xl mx-auto">
+          <div class="flex items-center justify-between pb-5 border-b border-hairline">
+            <div>
+              <div class="font-mono text-xs text-muted">Specimen Report</div>
+              <div class="font-display font-bold text-base text-ink mt-0.5">acme-corp / legacy-payment-monolith</div>
+            </div>
+            <button onclick="loadPreset('payment')" class="px-4 py-2 rounded-full bg-surface hover:bg-hairline text-ink text-xs font-medium transition-colors cursor-pointer">
+              Open interactive graph
+            </button>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-6">
+            <!-- Left Card: Primary Hotspot -->
+            <div class="p-5 rounded-2xl bg-surface/70 border border-hairline">
+              <div class="flex items-center justify-between text-xs font-mono text-muted mb-3">
+                <span>Primary Hotspot</span>
+                <span class="text-crimson font-semibold">94 / 100 rot</span>
+              </div>
+              <div class="font-mono text-sm font-semibold text-ink">src/billing/chargeEngine.ts</div>
+              <p class="mt-2 text-xs text-muted leading-relaxed">
+                482 lines · Swallows currency conversion exceptions inside an empty catch block before committing ledger rows.
+              </p>
+              <div class="mt-4 pt-3 border-t border-hairline flex justify-between font-mono text-[11px] text-muted">
+                <span>Coupled modules</span>
+                <span class="text-ink font-medium">4 files</span>
+              </div>
+            </div>
+
+            <!-- Right Card: Downstream Impact -->
+            <div class="p-5 rounded-2xl bg-surface/70 border border-hairline">
+              <div class="flex items-center justify-between text-xs font-mono text-muted mb-3">
+                <span>Downstream Blast Radius</span>
+                <span class="text-skyAccent font-semibold">2 critical sinks</span>
+              </div>
+              <div class="space-y-2.5 font-mono text-xs">
+                <div class="p-2.5 rounded-xl bg-white border border-hairline flex justify-between">
+                  <span class="text-ink">src/storage/dbLedger.ts</span>
+                  <span class="text-amber">64 rot</span>
+                </div>
+                <div class="p-2.5 rounded-xl bg-white border border-hairline flex justify-between">
+                  <span class="text-ink">src/events/webhookDispatcher.ts</span>
+                  <span class="text-amber">59 rot</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Pull-Quote Block -->
+    <section class="py-12 px-6">
+      <div class="max-w-4xl mx-auto rounded-3xl bg-surface p-8 sm:p-12 text-center">
+        <blockquote class="font-display text-xl sm:text-2xl font-semibold text-ink leading-snug max-w-2xl mx-auto">
+          “Instead of spending three days tracing tangled imports by hand, we heard the exact blast radius of our billing service in twenty seconds.”
+        </blockquote>
+        <div class="mt-4 text-xs font-mono text-muted">
+          Staff Infrastructure Engineer · Legacy Migration Audit
+        </div>
+      </div>
+    </section>
+
+    <!-- NEW MIDDLE SECTION: STICKY SCROLLYTELLING WORKFLOW (STAY IN 1 VIEWPORT ON SCROLL) -->
+    <section id="live-walkthrough" class="relative h-[380vh] border-y border-hairline bg-surface/40">
+      <div class="sticky top-0 min-h-screen flex items-center py-8 px-6 overflow-hidden">
+        <div class="max-w-5xl mx-auto w-full">
+          <!-- Top Header + Scroll Progress Line -->
+          <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
+            <div>
+              <p class="text-xs font-semibold text-skyAccent mb-1.5">Scroll to dissect</p>
+              <h2 class="font-display text-2xl sm:text-4xl font-bold text-ink leading-tight">
+                From GitHub link to spoken clarity
+              </h2>
+            </div>
+            <div class="flex items-center gap-3 text-xs font-mono text-muted">
+              <span id="scrolly-counter">01 / 04</span>
+              <div class="w-32 h-1 bg-hairline rounded-full overflow-hidden">
+                <div id="scrolly-progress-bar" class="h-full bg-ink w-0 transition-transform duration-150 ease-out origin-left"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Split Sticky Stage: Left Pure Scroll-Driven Steps + Right Morphing Product Window -->
+          <div class="grid grid-cols-1 md:grid-cols-12 gap-6 lg:gap-10 items-center">
+            <!-- Left Column: 4 Sequential Narrative Steps (100% Scroll-Driven, No Manual Clicks) -->
+            <div class="md:col-span-5 space-y-4 select-none">
+              <div
+                id="scrolly-step-1"
+                class="scrolly-nav-item is-active pl-4 border-l-2 border-ink py-1"
+              >
+                <div class="font-mono text-[11px] text-skyAccent font-medium">01 · Repository input</div>
+                <h3 class="font-display text-base sm:text-lg font-bold text-ink mt-0.5">Paste any GitHub repository URL</h3>
+                <p class="mt-1 text-xs text-muted leading-relaxed">
+                  Drop a public repository link. Necro-Docs fetches the file tree via REST API in milliseconds without cloning to disk.
+                </p>
+              </div>
+
+              <div
+                id="scrolly-step-2"
+                class="scrolly-nav-item pl-4 border-l-2 border-hairline py-1"
+              >
+                <div class="font-mono text-[11px] text-muted font-medium">02 · Dependency analysis</div>
+                <h3 class="font-display text-base sm:text-lg font-bold text-ink mt-0.5">Map imports & calculate code-rot</h3>
+                <p class="mt-1 text-xs text-muted leading-relaxed">
+                  Every import and database call is wired into a directional graph while each file receives a 0–100 structural decay score.
+                </p>
+              </div>
+
+              <div
+                id="scrolly-step-3"
+                class="scrolly-nav-item pl-4 border-l-2 border-hairline py-1"
+              >
+                <div class="font-mono text-[11px] text-muted font-medium">03 · Weakness isolation</div>
+                <h3 class="font-display text-base sm:text-lg font-bold text-ink mt-0.5">Spot brittle logic & silent failures</h3>
+                <p class="mt-1 text-xs text-muted leading-relaxed">
+                  High-risk hotspots surface immediately with exact line diagnostics—exposing swallowed exceptions and unguarded writes.
+                </p>
+              </div>
+
+              <div
+                id="scrolly-step-4"
+                class="scrolly-nav-item pl-4 border-l-2 border-hairline py-1"
+              >
+                <div class="font-mono text-[11px] text-muted font-medium">04 · Voice & AI explanation</div>
+                <h3 class="font-display text-base sm:text-lg font-bold text-ink mt-0.5">Ask aloud, hear the blast radius</h3>
+                <p class="mt-1 text-xs text-muted leading-relaxed">
+                  Interrogate the fragile module by voice while the AI Archaeologist explains downstream impact in plain language.
+                </p>
+              </div>
+            </div>
+
+            <!-- Right Column: Single Pinned Interactive Viewport Window -->
+            <div id="scrolly-window-wrapper" class="md:col-span-7 transition-transform duration-300 ease-out">
+              <div class="acctual-window rounded-3xl bg-white h-[380px] sm:h-[405px] relative overflow-hidden">
+
+                <!-- STAGE 1 VISUAL: PASTE GITHUB LINK -->
+                <div id="scrolly-panel-1" class="scrolly-stage-layer is-active p-6 sm:p-8 flex flex-col justify-between">
+                  <div class="flex items-center justify-between text-xs font-mono text-muted border-b border-hairline pb-3.5">
+                    <span>Step 01 · GitHub Tree Ingestion</span>
+                    <span class="text-ink">REST API · Ready</span>
+                  </div>
+
+                  <div class="my-auto space-y-4">
+                    <div class="scrolly-stagger scrolly-delay-1 p-3.5 rounded-2xl bg-surface border border-ink/20 flex items-center justify-between gap-3">
+                      <div class="flex items-center gap-2.5 min-w-0">
+                        <i data-lucide="git-branch" class="w-4 h-4 text-ink shrink-0"></i>
+                        <span class="font-mono text-xs text-ink truncate">github.com/acme-corp/legacy-payment-monolith</span>
+                      </div>
+                      <span class="px-3.5 py-1.5 rounded-full bg-ink text-white text-[11px] font-medium shrink-0">
+                        Indexed
+                      </span>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2.5 font-mono text-[11px]">
+                      <div class="scrolly-stagger scrolly-delay-2 p-3 rounded-xl border border-hairline bg-white flex justify-between">
+                        <span class="text-ink">src/server.ts</span>
+                        <span class="text-muted">112 LOC</span>
+                      </div>
+                      <div class="scrolly-stagger scrolly-delay-2 p-3 rounded-xl border border-hairline bg-white flex justify-between">
+                        <span class="text-ink">src/authGuard.ts</span>
+                        <span class="text-muted">289 LOC</span>
+                      </div>
+                      <div class="scrolly-stagger scrolly-delay-3 p-3 rounded-xl border border-hairline bg-white flex justify-between">
+                        <span class="text-ink">src/chargeEngine.ts</span>
+                        <span class="text-muted">482 LOC</span>
+                      </div>
+                      <div class="scrolly-stagger scrolly-delay-3 p-3 rounded-xl border border-hairline bg-white flex justify-between">
+                        <span class="text-ink">src/dbLedger.ts</span>
+                        <span class="text-muted">340 LOC</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="text-xs text-muted font-mono flex justify-between pt-3 border-t border-hairline">
+                    <span>Branch: main</span>
+                    <span class="text-ink">6 core files extracted in 0.4s</span>
+                  </div>
+                </div>
+
+                <!-- STAGE 2 VISUAL: ANALYZE & DRAW DEPENDENCY LINES -->
+                <div id="scrolly-panel-2" class="scrolly-stage-layer p-6 sm:p-8 flex flex-col justify-between">
+                  <div class="flex items-center justify-between text-xs font-mono text-muted border-b border-hairline pb-3.5">
+                    <span>Step 02 · AST Dependency Graph</span>
+                    <span class="text-skyAccent">4 edges resolved</span>
+                  </div>
+
+                  <div class="scrolly-stagger scrolly-delay-1 my-auto rounded-2xl paper-grid border border-hairline p-4 relative overflow-hidden">
+                    <svg viewBox="0 0 460 175" class="w-full h-44">
+                      <!-- Animated Self-Drawing Wires -->
+                      <path d="M 132 45 C 175 45, 175 88, 212 88" fill="none" stroke="#111113" stroke-width="1.5" class="draw-wire" />
+                      <path d="M 132 130 C 175 130, 175 88, 212 88" fill="none" stroke="#111113" stroke-width="1.5" class="draw-wire" />
+                      <path d="M 336 88 C 365 88, 365 45, 388 45" fill="none" stroke="#E11D48" stroke-width="1.8" class="draw-wire" />
+                      <path d="M 336 88 C 365 88, 365 130, 388 130" fill="none" stroke="#D97706" stroke-width="1.8" class="draw-wire" />
+
+                      <!-- Left Nodes -->
+                      <rect x="8" y="26" width="124" height="38" rx="10" fill="#FFFFFF" stroke="#E8E9ED" />
+                      <text x="20" y="49" font-family="JetBrains Mono, monospace" font-size="10" fill="#111113">authGuard.ts · 78</text>
+
+                      <rect x="8" y="111" width="124" height="38" rx="10" fill="#FFFFFF" stroke="#E8E9ED" />
+                      <text x="20" y="134" font-family="JetBrains Mono, monospace" font-size="10" fill="#111113">payRouter.ts · 48</text>
+
+                      <!-- Center Hotspot -->
+                      <rect x="212" y="64" width="124" height="48" rx="12" fill="#FFFFFF" stroke="#E11D48" stroke-width="1.5" />
+                      <text x="224" y="85" font-family="JetBrains Mono, monospace" font-size="10" font-weight="600" fill="#111113">chargeEngine.ts</text>
+                      <text x="224" y="100" font-family="JetBrains Mono, monospace" font-size="9" fill="#E11D48">94 rot score</text>
+
+                      <!-- Right Nodes -->
+                      <rect x="388" y="26" width="64" height="38" rx="10" fill="#FFFFFF" stroke="#E8E9ED" />
+                      <text x="396" y="49" font-family="JetBrains Mono, monospace" font-size="9" fill="#111113">dbLedger</text>
+
+                      <rect x="388" y="111" width="64" height="38" rx="10" fill="#FFFFFF" stroke="#E8E9ED" />
+                      <text x="396" y="134" font-family="JetBrains Mono, monospace" font-size="9" fill="#111113">webhook</text>
+                    </svg>
+                  </div>
+
+                  <div class="text-xs text-muted font-mono flex justify-between pt-3 border-t border-hairline">
+                    <span>Central coupling hub detected</span>
+                    <span class="text-crimson font-medium">chargeEngine.ts (94/100)</span>
+                  </div>
+                </div>
+
+                <!-- STAGE 3 VISUAL: CHECK WEAKNESSES & AUTOPSY FINDINGS -->
+                <div id="scrolly-panel-3" class="scrolly-stage-layer p-6 sm:p-8 flex flex-col justify-between">
+                  <div class="flex items-center justify-between text-xs font-mono border-b border-hairline pb-3.5">
+                    <span class="text-ink font-semibold">src/billing/chargeEngine.ts</span>
+                    <span class="text-crimson font-semibold">94 / 100 · Critical Decay</span>
+                  </div>
+
+                  <div class="my-auto space-y-3.5">
+                    <div class="scrolly-stagger scrolly-delay-1 p-3.5 rounded-2xl bg-surface border border-hairline font-mono text-[11px] leading-relaxed text-ink relative overflow-hidden">
+                      <div class="text-muted">try {</div>
+                      <div class="pl-3">amt = await convertRateUnsafe(amt, curr);</div>
+                      <div class="text-crimson font-medium">} catch (e) { /* silent fail — swallowed error */ }</div>
+                      <div class="pl-3">return await dbLedger.forceInsert({ uid, amt });</div>
+                    </div>
+
+                    <div class="space-y-2 text-xs">
+                      <div class="scrolly-stagger scrolly-delay-2 pl-3 border-l-2 border-crimson text-ink">
+                        <span class="font-medium">Flaw 01:</span> Empty catch block masks failed currency conversion before SQL write.
+                      </div>
+                      <div class="scrolly-stagger scrolly-delay-3 pl-3 border-l-2 border-amber text-muted">
+                        <span class="font-medium text-ink">Flaw 02:</span> Zero rollback guard between dbLedger and webhookDispatcher.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="text-xs text-muted font-mono flex justify-between pt-3 border-t border-hairline">
+                    <span>2 structural weaknesses isolated</span>
+                    <span class="text-ink">Ready for voice query</span>
+                  </div>
+                </div>
+
+                <!-- STAGE 4 VISUAL: VOICE QUESTION & AI EXPLANATION -->
+                <div id="scrolly-panel-4" class="scrolly-stage-layer p-6 sm:p-8 flex flex-col justify-between">
+                  <div class="flex items-center justify-between text-xs font-mono border-b border-hairline pb-3.5">
+                    <span class="text-ink font-medium">Step 04 · Live Voice Séance</span>
+                    <span class="text-skyAccent">Voice synthesis synced</span>
+                  </div>
+
+                  <div class="my-auto space-y-4">
+                    <!-- User Voice Prompt Bubble -->
+                    <div class="scrolly-stagger scrolly-delay-1 p-3.5 rounded-2xl bg-surface border border-hairline">
+                      <div class="font-mono text-[10px] text-muted mb-1">Developer Voice Prompt</div>
+                      <p class="text-xs font-medium text-ink">
+                        “What breaks if I refactor the error handling inside chargeEngine.ts?”
+                      </p>
+                    </div>
+
+                    <!-- AI Explanation Response -->
+                    <div class="scrolly-stagger scrolly-delay-2 p-4 rounded-2xl bg-white border border-ink/25">
+                      <div class="flex items-center justify-between font-mono text-[10px] text-skyAccent mb-1.5">
+                        <span>Code Archaeologist · Grounded AI</span>
+                        <span>2 downstream files spotlighted</span>
+                      </div>
+                      <p class="text-xs text-ink leading-relaxed">
+                        Because <span class="font-mono font-medium">chargeEngine.ts</span> currently swallows conversion errors, throwing an explicit exception will halt <span class="font-mono font-medium">dbLedger.ts</span> and prevent <span class="font-mono font-medium">webhookDispatcher.ts</span> from firing duplicate receipts.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div class="scrolly-stagger scrolly-delay-3 pt-3 border-t border-hairline flex items-center justify-between">
+                    <span class="font-mono text-[11px] text-muted">Camera synced to blast radius</span>
+                    <button
+                      onclick="loadPreset('payment')"
+                      class="px-4 py-1.5 rounded-full bg-ink hover:bg-neutral-800 text-white text-xs font-medium transition-colors cursor-pointer"
+                    >
+                      Try in full canvas
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2x3 Capabilities Grid -->
+    <section id="capabilities" class="py-20 px-6">
+      <div class="max-w-5xl mx-auto">
+        <div class="text-center max-w-xl mx-auto mb-14">
+          <p class="text-xs font-semibold text-skyAccent mb-2">Forensic capabilities</p>
+          <h2 class="font-display text-3xl sm:text-4xl font-bold text-ink">
+            Built for engineers inheriting complex systems
+          </h2>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div class="p-6 rounded-2xl bg-surface/70 border border-hairline">
+            <i data-lucide="network" class="w-5 h-5 text-ink mb-4"></i>
+            <h3 class="font-display font-bold text-base text-ink">Import & coupling graph</h3>
+            <p class="mt-1.5 text-sm text-muted leading-relaxed">
+              Parses ES modules, CommonJS, and Python imports into an interactive spatial blueprint without running untrusted code.
+            </p>
+          </div>
+
+          <div class="p-6 rounded-2xl bg-surface/70 border border-hairline">
+            <i data-lucide="gauge" class="w-5 h-5 text-ink mb-4"></i>
+            <h3 class="font-display font-bold text-base text-ink">Automated decay scoring</h3>
+            <p class="mt-1.5 text-sm text-muted leading-relaxed">
+              Combines cyclomatic nesting depth, line volume, and comment density into a single 0–100 structural risk index.
+            </p>
+          </div>
+
+          <div class="p-6 rounded-2xl bg-surface/70 border border-hairline">
+            <i data-lucide="mic" class="w-5 h-5 text-ink mb-4"></i>
+            <h3 class="font-display font-bold text-base text-ink">Spoken architecture queries</h3>
+            <p class="mt-1.5 text-sm text-muted leading-relaxed">
+              Ask questions out loud while inspecting a file. Answers are grounded strictly in the active module and its immediate neighbors.
+            </p>
+          </div>
+
+          <div class="p-6 rounded-2xl bg-surface/70 border border-hairline">
+            <i data-lucide="focus" class="w-5 h-5 text-ink mb-4"></i>
+            <h3 class="font-display font-bold text-base text-ink">Camera-linked blast radius</h3>
+            <p class="mt-1.5 text-sm text-muted leading-relaxed">
+              When the AI identifies affected downstream files, the workspace automatically highlights and pans to every impacted node.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3 Pastel Stage Cards (Acctual Style) -->
+    <section id="stages" class="py-16 px-6">
+      <div class="max-w-5xl mx-auto">
+        <div class="max-w-lg mb-12">
+          <h2 class="font-display text-3xl sm:text-4xl font-bold text-ink leading-tight">
+            Three stages from raw URL to architectural certainty
+          </h2>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <!-- Stage 01 -->
+          <div class="flex flex-col justify-between">
+            <div>
+              <div class="font-mono text-xs text-skyAccent font-semibold mb-2">01 · Tree ingestion</div>
+              <h3 class="font-display font-bold text-lg text-ink">Fetch repository structure</h3>
+              <p class="mt-2 text-sm text-muted leading-relaxed">
+                Pulls core source files via the GitHub Git Trees endpoint with automatic branch detection.
+              </p>
+            </div>
+            <div class="mt-6 h-36 rounded-2xl bg-sky-100/70 p-4 flex flex-col justify-end font-mono text-[11px] text-sky-950">
+              <div>GET /git/trees/main?recursive=1</div>
+              <div class="opacity-70 mt-1">24 source files indexed in 380ms</div>
+            </div>
+          </div>
+
+          <!-- Stage 02 -->
+          <div class="flex flex-col justify-between">
+            <div>
+              <div class="font-mono text-xs text-pink-600 font-semibold mb-2">02 · Decay autopsy</div>
+              <h3 class="font-display font-bold text-lg text-ink">Isolate fragile hotspots</h3>
+              <p class="mt-2 text-sm text-muted leading-relaxed">
+                Ranks every module by technical debt so you immediately know which files carry silent failure risk.
+              </p>
+            </div>
+            <div class="mt-6 h-36 rounded-2xl bg-pink-100/70 p-4 flex flex-col justify-end font-mono text-[11px] text-pink-950">
+              <div>chargeEngine.ts · 94/100</div>
+              <div class="opacity-70 mt-1">Swallowed exception on line 142</div>
+            </div>
+          </div>
+
+          <!-- Stage 03 -->
+          <div class="flex flex-col justify-between">
+            <div>
+              <div class="font-mono text-xs text-violet-600 font-semibold mb-2">03 · Voice interrogation</div>
+              <h3 class="font-display font-bold text-lg text-ink">Converse with the codebase</h3>
+              <p class="mt-2 text-sm text-muted leading-relaxed">
+                Speak naturally to trace edge cases, database writes, and regression risks across connected modules.
+              </p>
+            </div>
+            <div class="mt-6 h-36 rounded-2xl bg-violet-100/70 p-4 flex flex-col justify-end font-mono text-[11px] text-violet-950">
+              <div>“What breaks if I edit verifySession?”</div>
+              <div class="opacity-70 mt-1">2 downstream callers highlighted</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Preset Specimens Directory -->
+    <section class="py-16 px-6">
+      <div class="max-w-5xl mx-auto">
+        <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
+          <div>
+            <h2 class="font-display text-2xl sm:text-3xl font-bold text-ink">Load a sample specimen</h2>
+            <p class="text-sm text-muted mt-1">Explore pre-indexed repositories directly in the interactive canvas.</p>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+          <button onclick="loadPreset('payment')" class="text-left p-6 rounded-2xl bg-surface hover:bg-hairline/70 border border-hairline transition-colors cursor-pointer">
+            <div class="font-mono text-xs text-crimson font-semibold">74% infected · TypeScript</div>
+            <div class="font-display font-bold text-base text-ink mt-1.5">legacy-payment-monolith</div>
+            <p class="mt-2 text-xs text-muted leading-relaxed">
+              Multi-currency billing service with unguarded SQL writes and swallowed conversion exceptions.
+            </p>
+          </button>
+
+          <button onclick="loadPreset('scraper')" class="text-left p-6 rounded-2xl bg-surface hover:bg-hairline/70 border border-hairline transition-colors cursor-pointer">
+            <div class="font-mono text-xs text-amber font-semibold">58% infected · Python</div>
+            <div class="font-display font-bold text-base text-ink mt-1.5">async-crawler-worker</div>
+            <p class="mt-2 text-xs text-muted leading-relaxed">
+              Distributed queue consumer with shared mutable session state and unbounded retry loops.
+            </p>
+          </button>
+
+          <button onclick="loadPreset('realtime')" class="text-left p-6 rounded-2xl bg-surface hover:bg-hairline/70 border border-hairline transition-colors cursor-pointer">
+            <div class="font-mono text-xs text-emerald font-semibold">26% infected · Node.js</div>
+            <div class="font-display font-bold text-base text-ink mt-1.5">edge-socket-relay</div>
+            <p class="mt-2 text-xs text-muted leading-relaxed">
+              Clean WebSocket pub/sub broker with isolated heartbeat cleanup and well-typed payloads.
+            </p>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Bottom Closing Banner -->
+    <section class="py-14 px-6 mt-auto">
+      <div class="max-w-5xl mx-auto rounded-3xl bg-sky-50 border border-sky-100 p-8 sm:p-12 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
+        <div>
+          <h2 class="font-display text-2xl sm:text-3xl font-bold text-ink">Ready to inspect your codebase?</h2>
+          <p class="text-sm text-muted mt-1">Open the interactive graph workspace and test live voice interrogation.</p>
+        </div>
+        <button onclick="loadPreset('payment')" class="px-6 py-3 rounded-full bg-ink hover:bg-neutral-800 text-white text-xs font-semibold transition-colors cursor-pointer shrink-0">
+          Open workspace
+        </button>
+      </div>
+    </section>
+  </div>
+
+  <!-- ==================== VIEW 2: INTERACTIVE WORKSPACE ==================== -->
+  <div id="view-workspace" class="hidden h-screen w-screen overflow-hidden flex-col bg-canvas">
+
+    <!-- Top Workspace Bar -->
+    <header class="h-14 px-5 border-b border-hairline bg-white flex items-center justify-between shrink-0 z-20">
+      <div class="flex items-center gap-4">
+        <button onclick="backToLanding()" class="flex items-center gap-1.5 text-xs font-medium text-muted hover:text-ink transition-colors cursor-pointer">
+          <i data-lucide="chevron-left" class="w-4 h-4"></i>
+          <span>Back</span>
+        </button>
+        <div class="h-4 w-px bg-hairline"></div>
+        <span id="ws-repo-title" class="font-mono text-xs font-semibold text-ink">acme-corp/legacy-payment-monolith</span>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <span id="ws-rot-summary" class="hidden sm:inline font-mono text-xs text-muted">74% infected</span>
+        <button
+          id="btn-isolate"
+          onclick="toggleIsolateCursed()"
+          class="px-3.5 py-1.5 rounded-full border border-hairline text-xs font-medium text-ink hover:bg-surface transition-colors cursor-pointer"
+        >
+          Isolate hotspots
+        </button>
+        <button
+          onclick="resetCamera()"
+          class="px-3.5 py-1.5 rounded-full border border-hairline text-xs font-medium text-muted hover:text-ink transition-colors cursor-pointer"
+        >
+          Reset view
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Workspace Body -->
+    <div class="flex-1 relative flex overflow-hidden">
+
+      <!-- Interactive Canvas Area -->
+      <div id="canvas-viewport" class="flex-1 relative paper-grid overflow-hidden cursor-grab active:cursor-grabbing">
+        <div id="canvas-stage" class="absolute inset-0 origin-top-left transition-transform duration-300 ease-out" style="width: 1200px; height: 800px;">
+          <svg id="edges-svg" width="1200" height="800" class="absolute inset-0 pointer-events-none"></svg>
+          <div id="nodes-container" class="absolute inset-0"></div>
+        </div>
+
+        <!-- Bottom Floating Voice Séance Console -->
+        <div class="absolute bottom-6 left-1/2 -translate-x-1/2 w-[92%] max-w-xl z-20">
+          <div class="acctual-window rounded-3xl bg-white/95 backdrop-blur-md p-4">
+            <!-- Live Subtitle / AI Response -->
+            <div id="seance-transcript" class="text-xs text-ink leading-relaxed mb-3 px-1">
+              Select any file node or ask a question aloud to trace downstream dependencies.
+            </div>
+
+            <!-- Preset Quick Questions -->
+            <div class="flex flex-wrap items-center gap-2 mb-3">
+              <button onclick="triggerPresetQuestion('What breaks if I refactor chargeEngine.ts?')" class="px-3 py-1.5 rounded-full bg-surface hover:bg-hairline text-[11px] font-medium text-ink transition-colors cursor-pointer">
+                “What breaks if I edit chargeEngine.ts?”
+              </button>
+              <button onclick="triggerPresetQuestion('Explain the authGuard bypass risk')" class="px-3 py-1.5 rounded-full bg-surface hover:bg-hairline text-[11px] font-medium text-ink transition-colors cursor-pointer">
+                “Explain the authGuard bypass risk”
+              </button>
+            </div>
+
+            <!-- Mic Controls & Minimal Oscilloscope -->
+            <div class="flex items-center justify-between gap-3 pt-2 border-t border-hairline">
+              <button
+                id="btn-mic"
+                onclick="toggleVoiceRecognition()"
+                class="flex items-center gap-2 px-4 py-2 rounded-full bg-ink hover:bg-neutral-800 text-white text-xs font-medium transition-colors cursor-pointer"
+              >
+                <i data-lucide="mic" class="w-3.5 h-3.5"></i>
+                <span id="mic-label">Ask by voice</span>
+              </button>
+
+              <!-- Monochrome Hairline Waveform -->
+              <div id="waveform" class="flex items-center gap-1 h-5 px-2">
+                <span class="wave-bar w-0.5 h-2 bg-ink rounded-full" style="animation-delay: 0.0s"></span>
+                <span class="wave-bar w-0.5 h-3.5 bg-ink rounded-full" style="animation-delay: 0.1s"></span>
+                <span class="wave-bar w-0.5 h-5 bg-ink rounded-full" style="animation-delay: 0.2s"></span>
+                <span class="wave-bar w-0.5 h-3 bg-ink rounded-full" style="animation-delay: 0.3s"></span>
+                <span class="wave-bar w-0.5 h-4 bg-ink rounded-full" style="animation-delay: 0.15s"></span>
+                <span class="wave-bar w-0.5 h-2.5 bg-ink rounded-full" style="animation-delay: 0.25s"></span>
+                <span class="wave-bar w-0.5 h-4 bg-ink rounded-full" style="animation-delay: 0.05s"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Specimen Autopsy Drawer -->
+      <aside id="autopsy-drawer" class="w-full sm:w-96 border-l border-hairline bg-white h-full overflow-y-auto p-6 shrink-0 z-20">
+        <div class="flex items-start justify-between gap-3 pb-5 border-b border-hairline">
+          <div>
+            <div id="drawer-path" class="font-mono text-xs text-muted">src/billing/chargeEngine.ts</div>
+            <h2 id="drawer-title" class="font-display font-bold text-lg text-ink mt-0.5">chargeEngine.ts</h2>
+          </div>
+          <div id="drawer-score" class="font-mono text-sm font-bold text-crimson">94 / 100</div>
+        </div>
+
+        <div class="py-5 border-b border-hairline">
+          <div class="font-mono text-[11px] text-muted mb-2">Structural diagnosis</div>
+          <ul id="drawer-findings" class="space-y-2 text-xs text-ink leading-relaxed"></ul>
+        </div>
+
+        <div class="py-5 border-b border-hairline">
+          <div class="font-mono text-[11px] text-muted mb-2">Module telemetry</div>
+          <div class="grid grid-cols-2 gap-3 font-mono text-xs">
+            <div class="p-3 rounded-xl bg-surface">
+              <div class="text-muted text-[10px]">Lines of code</div>
+              <div id="drawer-loc" class="text-ink font-semibold mt-0.5">482 LOC</div>
+            </div>
+            <div class="p-3 rounded-xl bg-surface">
+              <div class="text-muted text-[10px]">Last modified</div>
+              <div id="drawer-commit" class="text-ink font-semibold mt-0.5">14 months ago</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="pt-5">
+          <div class="font-mono text-[11px] text-muted mb-2">Source excerpt</div>
+          <pre id="drawer-code" class="p-4 rounded-2xl bg-surface border border-hairline font-mono text-[11px] text-ink leading-relaxed overflow-x-auto"></pre>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    // Initialize Lucide icons
+    lucide.createIcons();
+
+    // Repository Datasets
+    const SPECIMENS = {
+      payment: {
+        title: 'acme-corp/legacy-payment-monolith',
+        rotSummary: '74% infected',
+        nodes: [
+          {
+            id: 'server',
+            name: 'server.ts',
+            path: 'src/server.ts',
+            loc: 112,
+            rot: 22,
+            lastCommit: '3 weeks ago',
+            x: 110,
+            y: 240,
+            findings: [
+              'Clean Express bootstrap with bounded body parser limits.',
+              'Delegates authentication directly to authGuard middleware.'
+            ],
+            code: `import express from 'express';\nimport { verifySession } from './middleware/authGuard';\nimport { payRouter } from './routes/payRouter';\n\nconst app = express();\napp.use('/api/pay', verifySession, payRouter);`
+          },
+          {
+            id: 'auth',
+            name: 'authGuard.ts',
+            path: 'src/middleware/authGuard.ts',
+            loc: 289,
+            rot: 78,
+            lastCommit: '9 months ago',
+            x: 380,
+            y: 120,
+            findings: [
+              'Legacy x-legacy header bypasses JWT signature validation.',
+              'No rate limiting on fallback guest token decoding.'
+            ],
+            code: `export async function verifySession(req, res, next) {\n  const raw = req.headers['x-legacy'];\n  if (raw) {\n    // TODO: remove bypass before v2\n    req.user = decodeUnsafe(raw);\n    return next();\n  }\n  return validateBearer(req, res, next);\n}`
+          },
+          {
+            id: 'router',
+            name: 'payRouter.ts',
+            path: 'src/routes/payRouter.ts',
+            loc: 164,
+            rot: 48,
+            lastCommit: '4 months ago',
+            x: 380,
+            y: 360,
+            findings: [
+              'Missing request schema validation before invoking chargeEngine.',
+              'Passes raw floating-point amounts directly downstream.'
+            ],
+            code: `payRouter.post('/charge', async (req, res) => {\n  const { uid, amt, curr } = req.body;\n  const receipt = await executeCharge(uid, amt, curr);\n  res.json({ ok: true, receipt });\n});`
+          },
+          {
+            id: 'charge',
+            name: 'chargeEngine.ts',
+            path: 'src/billing/chargeEngine.ts',
+            loc: 482,
+            rot: 94,
+            lastCommit: '14 months ago',
+            x: 670,
+            y: 240,
+            findings: [
+              'Empty catch block swallows currency conversion failures.',
+              'Commits ledger rows without transactional rollback guard.'
+            ],
+            code: `export async function executeCharge(uid, amt, curr) {\n  try {\n    amt = await convertRateUnsafe(amt, curr);\n  } catch (e) {\n    /* silent fail — swallowed error */\n  }\n  const row = await dbLedger.forceInsert({ uid, amt });\n  await dispatchWebhook('charge.settled', row);\n  return row;\n}`
+          },
+          {
+            id: 'ledger',
+            name: 'dbLedger.ts',
+            path: 'src/storage/dbLedger.ts',
+            loc: 340,
+            rot: 64,
+            lastCommit: '8 months ago',
+            x: 940,
+            y: 130,
+            findings: [
+              'Lacks idempotency key constraint on ledger inserts.',
+              'Directly coupled to chargeEngine write schema.'
+            ],
+            code: `export const dbLedger = {\n  async forceInsert(payload) {\n    return pool.query(\n      'INSERT INTO ledger_entries(uid, amount) VALUES($1, $2)',\n      [payload.uid, payload.amt]\n    );\n  }\n};`
+          },
+          {
+            id: 'webhook',
+            name: 'webhookDispatcher.ts',
+            path: 'src/events/webhookDispatcher.ts',
+            loc: 198,
+            rot: 59,
+            lastCommit: '6 months ago',
+            x: 940,
+            y: 350,
+            findings: [
+              'Fires external merchant callbacks even when upstream rate conversion failed.',
+              'Synchronous retry loop can stall worker event loop.'
+            ],
+            code: `export async function dispatchWebhook(event, data) {\n  return fetch(MERCHANT_HOOK_URL, {\n    method: 'POST',\n    body: JSON.stringify({ event, data })\n  });\n}`
+          }
+        ],
+        edges: [
+          { from: 'server', to: 'auth' },
+          { from: 'server', to: 'router' },
+          { from: 'auth', to: 'charge' },
+          { from: 'router', to: 'charge' },
+          { from: 'charge', to: 'ledger' },
+          { from: 'charge', to: 'webhook' }
+        ]
+      },
+      scraper: {
+        title: 'data-ops/async-crawler-worker',
+        rotSummary: '58% infected',
+        nodes: [
+          {
+            id: 'main',
+            name: 'worker.py',
+            path: 'crawler/worker.py',
+            loc: 210,
+            rot: 35,
+            lastCommit: '2 weeks ago',
+            x: 150,
+            y: 240,
+            findings: ['Standard asyncio event loop entrypoint.'],
+            code: `async def run_worker():\n    while True:\n        job = await queue.pop()\n        await fetch_page(job.url)`
+          },
+          {
+            id: 'fetcher',
+            name: 'sessionPool.py',
+            path: 'crawler/sessionPool.py',
+            loc: 390,
+            rot: 82,
+            lastCommit: '11 months ago',
+            x: 470,
+            y: 240,
+            findings: [
+              'Global mutable cookie jar shared across concurrent tenants.',
+              'Unbounded recursion on HTTP 429 backoff.'
+            ],
+            code: `SHARED_COOKIES = {}\n\nasync def fetch_page(url):\n    async with aiohttp.ClientSession(cookies=SHARED_COOKIES) as s:\n        return await s.get(url)`
+          },
+          {
+            id: 'parser',
+            name: 'domExtractor.py',
+            path: 'crawler/domExtractor.py',
+            loc: 275,
+            rot: 52,
+            lastCommit: '5 months ago',
+            x: 800,
+            y: 240,
+            findings: ['Regex HTML fallback triggers catastrophic backtracking on malformed tags.'],
+            code: `def extract_prices(html: str):\n    return re.findall(r'<span class="price">(.*?)</span>', html)`
+          }
+        ],
+        edges: [
+          { from: 'main', to: 'fetcher' },
+          { from: 'fetcher', to: 'parser' }
+        ]
+      },
+      realtime: {
+        title: 'infra/edge-socket-relay',
+        rotSummary: '26% infected',
+        nodes: [
+          {
+            id: 'gateway',
+            name: 'gateway.ts',
+            path: 'src/gateway.ts',
+            loc: 145,
+            rot: 18,
+            lastCommit: '4 days ago',
+            x: 180,
+            y: 240,
+            findings: ['Well-structured WebSocket upgrade handler with strict origin checks.'],
+            code: `wss.on('connection', (ws, req) => {\n  if (!isAllowedOrigin(req.headers.origin)) return ws.close();\n  registerClient(ws);\n});`
+          },
+          {
+            id: 'broker',
+            name: 'topicBroker.ts',
+            path: 'src/topicBroker.ts',
+            loc: 220,
+            rot: 34,
+            lastCommit: '1 week ago',
+            x: 540,
+            y: 240,
+            findings: ['Clean pub/sub channel map; consider adding max subscribers per room.'],
+            code: `export function publish(topic: string, payload: Uint8Array) {\n  const subs = channels.get(topic);\n  subs?.forEach((client) => client.send(payload));\n}`
+          }
+        ],
+        edges: [
+          { from: 'gateway', to: 'broker' }
+        ]
+      }
+    };
+
+    // Workspace State
+    let currentSpecimen = SPECIMENS.payment;
+    let selectedNodeId = 'charge';
+    let spotlightNodeIds = [];
+    let isolateCursed = false;
+    let panX = 0;
+    let panY = 0;
+    let scale = 1;
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+
+    function handleCustomRepo(e) {
+      e.preventDefault();
+      const input = document.getElementById('repo-url-input').value.trim();
+      loadPreset('payment', input || undefined);
+    }
+
+    function loadPreset(key, customTitle) {
+      currentSpecimen = SPECIMENS[key] || SPECIMENS.payment;
+      selectedNodeId = currentSpecimen.nodes[0]?.id || null;
+      const hotspot = [...currentSpecimen.nodes].sort((a, b) => b.rot - a.rot)[0];
+      if (hotspot) selectedNodeId = hotspot.id;
+
+      spotlightNodeIds = [];
+      isolateCursed = false;
+      document.getElementById('btn-isolate').classList.remove('bg-ink', 'text-white');
+
+      document.getElementById('ws-repo-title').textContent = customTitle || currentSpecimen.title;
+      document.getElementById('ws-rot-summary').textContent = currentSpecimen.rotSummary;
+
+      document.getElementById('view-landing').classList.add('hidden');
+      document.getElementById('view-workspace').classList.remove('hidden');
+      document.getElementById('view-workspace').classList.add('flex');
+
+      resetCamera();
+      renderGraph();
+      if (selectedNodeId) selectNode(selectedNodeId);
+    }
+
+    function backToLanding() {
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+      document.getElementById('view-workspace').classList.add('hidden');
+      document.getElementById('view-workspace').classList.remove('flex');
+      document.getElementById('view-landing').classList.remove('hidden');
+    }
+
+    function getRotColorClass(rot) {
+      if (rot >= 75) return 'text-crimson';
+      if (rot >= 45) return 'text-amber';
+      return 'text-emerald';
+    }
+
+    function renderGraph() {
+      const svg = document.getElementById('edges-svg');
+      const container = document.getElementById('nodes-container');
+      svg.innerHTML = '';
+      container.innerHTML = '';
+
+      // Draw curved edges
+      currentSpecimen.edges.forEach(edge => {
+        const fromNode = currentSpecimen.nodes.find(n => n.id === edge.from);
+        const toNode = currentSpecimen.nodes.find(n => n.id === edge.to);
+        if (!fromNode || !toNode) return;
+
+        const x1 = fromNode.x + 226;
+        const y1 = fromNode.y + 42;
+        const x2 = toNode.x;
+        const y2 = toNode.y + 42;
+        const midX = (x1 + x2) / 2;
+
+        const isHighlighted =
+          spotlightNodeIds.includes(edge.from) && spotlightNodeIds.includes(edge.to) ||
+          (selectedNodeId === edge.from || selectedNodeId === edge.to);
+
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`);
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke', spotlightNodeIds.includes(edge.to) ? '#0284C7' : (isHighlighted ? '#111113' : '#D4D4D8'));
+        path.setAttribute('stroke-width', isHighlighted ? '1.8' : '1.2');
+        svg.appendChild(path);
+      });
+
+      // Render node cards
+      currentSpecimen.nodes.forEach(node => {
+        const el = document.createElement('div');
+        const isSelected = node.id === selectedNodeId;
+        const isSpotlight = spotlightNodeIds.includes(node.id);
+        const isDimmed = isolateCursed && node.rot < 70 && !isSelected && !isSpotlight;
+
+        el.className = `node-card ${isSelected ? 'is-selected' : ''} ${isSpotlight ? 'is-spotlight' : ''} ${isDimmed ? 'is-dimmed' : ''}`;
+        el.style.left = `${node.x}px`;
+        el.style.top = `${node.y}px`;
+        el.onclick = (e) => {
+          e.stopPropagation();
+          selectNode(node.id);
+        };
+
+        el.innerHTML = `
+          <div class="flex items-center justify-between font-mono text-[10px] text-muted mb-1">
+            <span>${node.loc} LOC</span>
+            <span class="font-semibold ${getRotColorClass(node.rot)}">${node.rot} rot</span>
+          </div>
+          <div class="font-mono text-xs font-semibold text-ink truncate">${node.name}</div>
+          <div class="font-mono text-[10px] text-muted truncate mt-0.5">${node.path}</div>
+        `;
+        container.appendChild(el);
+      });
+    }
+
+    function selectNode(id) {
+      selectedNodeId = id;
+      const node = currentSpecimen.nodes.find(n => n.id === id);
+      if (!node) return;
+
+      document.getElementById('drawer-path').textContent = node.path;
+      document.getElementById('drawer-title').textContent = node.name;
+      const scoreEl = document.getElementById('drawer-score');
+      scoreEl.textContent = `${node.rot} / 100`;
+      scoreEl.className = `font-mono text-sm font-bold ${getRotColorClass(node.rot)}`;
+
+      document.getElementById('drawer-loc').textContent = `${node.loc} LOC`;
+      document.getElementById('drawer-commit').textContent = node.lastCommit;
+      document.getElementById('drawer-code').textContent = node.code;
+
+      const findingsEl = document.getElementById('drawer-findings');
+      findingsEl.innerHTML = node.findings
+        .map(f => `<li class="pl-3 border-l-2 border-hairline">${f}</li>`)
+        .join('');
+
+      renderGraph();
+    }
+
+    function toggleIsolateCursed() {
+      isolateCursed = !isolateCursed;
+      const btn = document.getElementById('btn-isolate');
+      if (isolateCursed) {
+        btn.classList.add('bg-ink', 'text-white');
+      } else {
+        btn.classList.remove('bg-ink', 'text-white');
+      }
+      renderGraph();
+    }
+
+    // Pan & Zoom Controls
+    const viewport = document.getElementById('canvas-viewport');
+    const stage = document.getElementById('canvas-stage');
+
+    function applyTransform() {
+      stage.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+    }
+
+    function resetCamera() {
+      panX = 0;
+      panY = 20;
+      scale = 0.92;
+      applyTransform();
+    }
+
+    function focusOnNodes(ids) {
+      const targets = currentSpecimen.nodes.filter(n => ids.includes(n.id));
+      if (!targets.length) return;
+      const avgX = targets.reduce((acc, n) => acc + n.x + 113, 0) / targets.length;
+      const avgY = targets.reduce((acc, n) => acc + n.y + 42, 0) / targets.length;
+      const rect = viewport.getBoundingClientRect();
+      scale = 1;
+      panX = rect.width / 2 - avgX;
+      panY = rect.height / 2 - avgY - 40;
+      applyTransform();
+    }
+
+    viewport.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.node-card') || e.target.closest('.acctual-window')) return;
+      isDragging = true;
+      dragStartX = e.clientX - panX;
+      dragStartY = e.clientY - panY;
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      panX = e.clientX - dragStartX;
+      panY = e.clientY - dragStartY;
+      applyTransform();
+    });
+
+    window.addEventListener('mouseup', () => {
+      isDragging = false;
+    });
+
+    // Voice Interrogation & Spoken Response
+    function speakReply(text) {
+      const waveform = document.getElementById('waveform');
+      waveform.classList.add('is-speaking');
+
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.rate = 1.02;
+        utter.onend = () => waveform.classList.remove('is-speaking');
+        utter.onerror = () => waveform.classList.remove('is-speaking');
+        window.speechSynthesis.speak(utter);
+      } else {
+        setTimeout(() => waveform.classList.remove('is-speaking'), 2600);
+      }
+    }
+
+    function triggerPresetQuestion(query) {
+      const transcriptEl = document.getElementById('seance-transcript');
+      let reply = '';
+
+      if (query.toLowerCase().includes('auth')) {
+        spotlightNodeIds = ['auth', 'charge'];
+        selectNode('auth');
+        focusOnNodes(['auth', 'charge']);
+        reply = 'authGuard.ts accepts an unverified x-legacy header that bypasses JWT checks and forwards unvalidated sessions straight into chargeEngine.ts.';
+      } else {
+        spotlightNodeIds = ['charge', 'ledger', 'webhook'];
+        selectNode('charge');
+        focusOnNodes(['charge', 'ledger', 'webhook']);
+        reply = 'chargeEngine.ts currently swallows currency conversion errors. Throwing an explicit exception will halt dbLedger inserts and prevent webhookDispatcher from sending false receipts.';
+      }
+
+      transcriptEl.innerHTML = `<span class="font-mono text-[11px] text-skyAccent block mb-1">Query: “${query}”</span>${reply}`;
+      renderGraph();
+      speakReply(reply);
+    }
+
+    function toggleVoiceRecognition() {
+      const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const micLabel = document.getElementById('mic-label');
+
+      if (!SpeechRec) {
+        triggerPresetQuestion('What breaks if I refactor chargeEngine.ts?');
+        return;
+      }
+
+      const recognition = new SpeechRec();
+      recognition.lang = 'en-US';
+      micLabel.textContent = 'Listening...';
+
+      recognition.onresult = (event) => {
+        const spoken = event.results[0][0].transcript;
+        micLabel.textContent = 'Ask by voice';
+        triggerPresetQuestion(spoken);
+      };
+
+      recognition.onerror = () => {
+        micLabel.textContent = 'Ask by voice';
+        triggerPresetQuestion('What breaks if I refactor chargeEngine.ts?');
+      };
+
+      recognition.onend = () => {
+        micLabel.textContent = 'Ask by voice';
+      };
+
+      recognition.start();
+    }
+
+    // Sticky Scrollytelling 4-Step Controller (100% Scroll-Driven)
+    let activeScrollyStep = 1;
+
+    function setScrollyStep(step) {
+      if (activeScrollyStep === step) return;
+      activeScrollyStep = step;
+
+      const counterEl = document.getElementById('scrolly-counter');
+      if (counterEl) counterEl.textContent = `0${step} / 04`;
+
+      [1, 2, 3, 4].forEach(s => {
+        const nav = document.getElementById(`scrolly-step-${s}`);
+        const panel = document.getElementById(`scrolly-panel-${s}`);
+        if (!nav || !panel) return;
+
+        const eyebrow = nav.querySelector('div');
+        if (s === step) {
+          nav.classList.add('is-active', 'border-ink');
+          nav.classList.remove('border-hairline');
+          if (eyebrow) {
+            eyebrow.classList.add('text-skyAccent');
+            eyebrow.classList.remove('text-muted');
+          }
+          panel.classList.add('is-active');
+        } else {
+          nav.classList.remove('is-active', 'border-ink');
+          nav.classList.add('border-hairline');
+          if (eyebrow) {
+            eyebrow.classList.remove('text-skyAccent');
+            eyebrow.classList.add('text-muted');
+          }
+          panel.classList.remove('is-active');
+        }
+      });
+    }
+
+    function handleScrollyProgress() {
+      const section = document.getElementById('live-walkthrough');
+      if (!section) return;
+
+      const rect = section.getBoundingClientRect();
+      const scrollableDistance = section.offsetHeight - window.innerHeight;
+      if (scrollableDistance <= 0) return;
+
+      const scrolled = Math.min(Math.max(-rect.top, 0), scrollableDistance);
+      const progress = scrolled / scrollableDistance;
+
+      // Continuous smooth progress bar fill
+      const progressBar = document.getElementById('scrolly-progress-bar');
+      if (progressBar) {
+        progressBar.style.width = `${Math.max(6, progress * 100)}%`;
+      }
+
+      // Continuous subtle float motion tied directly to scroll progress
+      const windowWrapper = document.getElementById('scrolly-window-wrapper');
+      if (windowWrapper) {
+        const stepLocalProgress = (progress * 4) % 1;
+        const microLift = Math.sin(stepLocalProgress * Math.PI) * -5;
+        windowWrapper.style.transform = `translateY(${microLift.toFixed(1)}px)`;
+      }
+
+      if (progress < 0.25) {
+        setScrollyStep(1);
+      } else if (progress < 0.50) {
+        setScrollyStep(2);
+      } else if (progress < 0.75) {
+        setScrollyStep(3);
+      } else {
+        setScrollyStep(4);
+      }
+    }
+
+    let scrollTicking = false;
+    window.addEventListener('scroll', () => {
+      if (!scrollTicking) {
+        window.requestAnimationFrame(() => {
+          handleScrollyProgress();
+          scrollTicking = false;
+        });
+        scrollTicking = true;
+      }
+    }, { passive: true });
+    window.addEventListener('resize', handleScrollyProgress, { passive: true });
+    handleScrollyProgress();
+  </script>
+</body>
+</html>

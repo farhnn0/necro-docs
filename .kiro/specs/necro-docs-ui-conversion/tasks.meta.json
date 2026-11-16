@@ -1,0 +1,486 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1.1 Inspect the prototype and existing ingest types/contracts, then record the implementation mapping in the conversion modules without modifying `src/app/api/ingest/`, `src/lib/ingest/`, `.kiro/specs/github-ingest-coderot/`, or the prototype HTML.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721940815
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721955506
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794722184610
+      }
+    ],
+    "1.2 Create the shared conversion type definitions for preset specimens, ingested specimens, workspace nodes, edges, loading/error state, seance requests/responses, and spotlight state in the appropriate `src/lib` module.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721940944
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794722192195
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794722651934
+      }
+    ],
+    "1.3 Add the three server/client-safe preset specimen datasets and fallback answers.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721941029
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794722192274
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794722652077
+      }
+    ],
+    "1.4 Add pure conversion and policy helpers.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721941084
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794722658615
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794722935544
+      }
+    ],
+    "2.1 Update `src/app/layout.tsx` as a Server Component.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721941136
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721955845
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794722184902
+      }
+    ],
+    "2.2 Replace the starter global styling in `src/app/globals.css` with the prototype design tokens and base rules.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721941278
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794722192350
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794722652214
+      }
+    ],
+    "2.3 Add the shared reduced-motion rules and visual animation primitives to `globals.css`.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721941328
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794722658877
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794722935825
+      }
+    ],
+    "3.1 Replace `src/app/page.tsx` with the semantic landing-page structure and prototype copy.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721941383
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794722659144
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794722936148
+      }
+    ],
+    "3.2 Wire landing-page navigation and repository form behavior.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721941437
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794722963892
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794723245200
+      }
+    ],
+    "3.3 Implement the sticky `#live-walkthrough` scrollytelling controller.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721941498
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794722964164
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794723245488
+      }
+    ],
+    "4.1 Create the client workspace page at `src/app/workspace/page.tsx` with viewport-filling semantic layout.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721941562
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794723255820
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794723381773
+      }
+    ],
+    "4.2 Implement preset loading and initial selection.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721941626
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794723393877
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794724278753
+      }
+    ],
+    "4.3 Implement the repository ingest request lifecycle.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721941697
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794723394024
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794724278875
+      }
+    ],
+    "4.4 Implement loading, slow, cancel, error, retry, and fallback states.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721941779
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794724296531
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794724504296
+      }
+    ],
+    "5.1 Render workspace graph nodes and curved edges from the active specimen.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721941833
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794723394123
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794724279111
+      }
+    ],
+    "5.2 Implement pointer and keyboard pan plus reset behavior.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721941889
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794724296792
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794724504567
+      }
+    ],
+    "5.3 Implement selection, spotlight centering, and node accessibility.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721941947
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794724302644
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794724504849
+      }
+    ],
+    "5.4 Implement the responsive Detail_Panel.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721942009
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794724511485
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794724694513
+      }
+    ],
+    "6.1 Render the Seance_Console UI and keyboard-first controls.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721942071
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794724511603
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794724694794
+      }
+    ],
+    "6.2 Implement speech recognition lifecycle and error handling.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721942132
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794724700752
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794725046513
+      }
+    ],
+    "6.3 Implement Seance_API requests, response handling, and fallback answers.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721942189
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794724701043
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794725046661
+      }
+    ],
+    "6.4 Implement speech synthesis and waveform behavior.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721942246
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794725065295
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794725249241
+      }
+    ],
+    "7.1 Wire the landing page, workspace route, shared specimens/helpers, graph, detail panel, ingest lifecycle, and Seance console into the final user flows.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721942304
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794725254275
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794725592580
+      }
+    ],
+    "7.2 Add final accessibility and static-boundary checks.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721942361
+      },
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794725597995
+      },
+      {
+        "executionId": "5f5ff2fc-b3fb-414f-b999-cc020d6b1a3f",
+        "chatSessionId": "sess_32ac66fd-6223-41ce-851f-9505d349b4b0",
+        "timestamp": 1794739534377
+      },
+      {
+        "executionId": "5f5ff2fc-b3fb-414f-b999-cc020d6b1a3f",
+        "chatSessionId": "sess_32ac66fd-6223-41ce-851f-9505d349b4b0",
+        "timestamp": 1794739855545
+      }
+    ],
+    "8. Checkpoint - Ensure all tests pass, lint is clean, the production build succeeds, and ask the user if questions arise.": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794721942412
+      }
+    ],
+    "1. Establish the conversion data and shared logic boundaries": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794722935638
+      }
+    ],
+    "2. Convert the root layout and global design system": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794722935895
+      }
+    ],
+    "3. Implement the landing page and scrollytelling": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794723245551
+      }
+    ],
+    "4. Implement workspace loading, preset selection, and ingest lifecycle": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794724504356
+      }
+    ],
+    "5. Implement graph canvas, node interaction, edges, and detail panel": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794724694572
+      }
+    ],
+    "6. Implement the Seance console and API fallback behavior": [
+      {
+        "executionId": "15328250-d995-4e3a-9102-9ad883615594",
+        "chatSessionId": "sess_8f398788-3ad2-4770-9134-a94567085658",
+        "timestamp": 1794725249318
+      }
+    ],
+    "6.5 Write Seance console and API contract tests.": [
+      {
+        "executionId": "27eb4666-64ac-44ce-9908-af72a3d13277",
+        "chatSessionId": "sess_2b2a7deb-50db-4217-95fa-508aba4c3f7a",
+        "timestamp": 1794739293800
+      },
+      {
+        "executionId": "27eb4666-64ac-44ce-9908-af72a3d13277",
+        "chatSessionId": "sess_2b2a7deb-50db-4217-95fa-508aba4c3f7a",
+        "timestamp": 1794739520756
+      }
+    ],
+    "7.3 Run the focused conversion test suite and the existing ingest test suite; fix regressions without changing the frozen ingest implementation.": [
+      {
+        "executionId": "955fe0c7-c455-4fc1-af4e-456c60a4fafe",
+        "chatSessionId": "sess_4bc620ed-df45-44ae-ba57-2bb0e67b702a",
+        "timestamp": 1794739867384
+      }
+    ]
+  }
+}

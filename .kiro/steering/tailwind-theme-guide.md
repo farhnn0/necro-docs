@@ -2,35 +2,36 @@
 
 ## Theme Configuration
 
-### Dark Cyber-Gothic Anatomical Blueprint
+### Clean Modern Minimal Design
 
-Tema Necro-Docs menggabungkan dark mode dengan aesthetic cyber-gothic dan anatomical blueprint visuals.
+Tema Necro-Docs menggunakan aesthetic clean modern dengan white backgrounds, minimal shadows, dan accent colors yang subtle.
 
 ## Color System
 
-### Primary Colors (Blueprint Navy)
+### Primary Colors (Canvas & Surface)
 ```
-900: #0a0e27 - Deep void (backgrounds)
-800: #0f1a3d - Dark navy (secondary bg)
-700: #1a2a5e - Blueprint navy (tertiary bg)
-600: #2d3f7f - Mid navy
-```
-
-### Neon Accent Colors
-```
-Cyan:    #00d9ff - Primary accent, glow effects
-Green:   #00ff88 - Success, highlights
-Purple:  #c700ff - Secondary accent, effects
-Red:     #ff0040 - Alerts, danger
-Blue:    #0080ff - Information
+Canvas:   #FFFFFF - Main background
+Surface:  #F6F7F9 - Secondary/elevated backgrounds
+Ink:      #111113 - Primary text color
+Muted:    #686A72 - Secondary text, placeholders
+Hairline: #E8E9ED - Borders, dividers
 ```
 
-### Neutral Colors
+### Accent Colors
 ```
-Bone:    #e8e8e8 - Light text, highlights
-Ghost:   #a0a0a0 - Secondary text
-Slate:   #4a5568 - Borders, dividers
-Black:   #000000 - Pure black for contrast
+Sky:      #0284C7 - Primary accent, links, focus states
+Crimson:  #E11D48 - Errors, warnings, high-risk alerts
+Amber:    #D97706 - Warnings, caution
+Emerald:  #059669 - Success states
+```
+
+### Stage Colors (For UI elements)
+```
+Stage Sky:    #E0F2FE - Light blue background for sections
+Stage Pink:   #FCE7F3 - Light pink for decorative elements
+Stage Violet: #EDE9FE - Light purple for sections
+Closing Sky:  #F0F9FF - Light blue for CTA sections
+Grid Dot:     #D4D4D8 - Grid pattern background
 ```
 
 ## Tailwind Custom Configuration
@@ -50,62 +51,34 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Blueprint Navy
-        blueprint: {
-          900: '#0a0e27',
-          800: '#0f1a3d',
-          700: '#1a2a5e',
-          600: '#2d3f7f',
-          500: '#3d51a0',
-        },
-        // Neon Accents
-        neon: {
-          cyan: '#00d9ff',
-          green: '#00ff88',
-          purple: '#c700ff',
-          red: '#ff0040',
-          blue: '#0080ff',
-        },
-        // Neutrals
-        bone: '#e8e8e8',
-        ghost: '#a0a0a0',
-      },
-      backgroundImage: {
-        'gradient-to-br-dark':
-          'linear-gradient(to bottom right, var(--tw-gradient-stops))',
-        'circuit-pattern':
-          'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(0, 217, 255, 0.03) 10px, rgba(0, 217, 255, 0.03) 20px)',
-      },
-      boxShadow: {
-        'neon-cyan': '0 0 20px rgba(0, 217, 255, 0.5)',
-        'neon-green': '0 0 20px rgba(0, 255, 136, 0.5)',
-        'neon-purple': '0 0 20px rgba(199, 0, 255, 0.5)',
-        'glow-sm': '0 0 10px rgba(0, 217, 255, 0.3)',
-        'glow-md': '0 0 20px rgba(0, 217, 255, 0.4)',
-        'glow-lg': '0 0 30px rgba(0, 217, 255, 0.5)',
-      },
-      animation: {
-        'pulse-cyan': 'pulse-cyan 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-        'flicker': 'flicker 3s linear infinite',
-        'scan-line': 'scan-line 8s linear infinite',
-      },
-      keyframes: {
-        'pulse-cyan': {
-          '0%, 100%': { opacity: '1' },
-          '50%': { opacity: '0.7' },
-        },
-        'flicker': {
-          '0%, 19%, 21%, 23%, 25%, 54%, 56%, 100%': { opacity: '1' },
-          '20%, 24%, 55%': { opacity: '0.8' },
-        },
-        'scan-line': {
-          '0%': { transform: 'translateY(-100%)' },
-          '100%': { transform: 'translateY(100%)' },
-        },
+        // Primary palette
+        canvas: '#FFFFFF',
+        surface: '#F6F7F9',
+        ink: '#111113',
+        muted: '#686A72',
+        hairline: '#E8E9ED',
+        
+        // Accent colors
+        skyAccent: '#0284C7',
+        crimson: '#E11D48',
+        amber: '#D97706',
+        emerald: '#059669',
+        
+        // Stage colors
+        stageSky: '#E0F2FE',
+        stagePink: '#FCE7F3',
+        stageViolet: '#EDE9FE',
+        closingSky: '#F0F9FF',
+        gridDot: '#D4D4D8',
       },
       fontFamily: {
         sans: ['var(--font-geist-sans)', 'system-ui', 'sans-serif'],
         mono: ['var(--font-geist-mono)', 'monospace'],
+        display: ['var(--font-display)', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+      },
+      boxShadow: {
+        'card': '0 24px 60px -15px rgba(17, 17, 19, 0.08), 0 4px 16px -2px rgba(17, 17, 19, 0.03)',
+        'sm': '0 1px 2px 0 rgba(17, 17, 19, 0.05)',
       },
       fontSize: {
         'xs': ['0.75rem', { lineHeight: '1rem' }],
@@ -116,6 +89,8 @@ const config: Config = {
         '2xl': ['1.5rem', { lineHeight: '2rem' }],
         '3xl': ['1.875rem', { lineHeight: '2.25rem' }],
         '4xl': ['2.25rem', { lineHeight: '2.5rem' }],
+        '5xl': ['3rem', { lineHeight: '1.2' }],
+        '6xl': ['3.75rem', { lineHeight: '1.1' }],
       },
     },
   },
@@ -127,77 +102,80 @@ export default config;
 
 ## Component Styling Patterns
 
-### Card Component (Dark with Glow)
+### Card Component (Clean White with Border)
 ```tsx
 <div className="
-  bg-gradient-to-br from-blueprint-800 via-blueprint-900 to-black
-  border border-neon-cyan/20
-  rounded-lg
-  shadow-glow-md
-  hover:shadow-glow-lg
-  hover:border-neon-cyan/40
-  transition-all duration-300
-  p-4
+  rounded-3xl
+  border border-hairline
+  bg-white
+  p-6 sm:p-8
+  shadow-card
+  hover:shadow-lg
+  transition-shadow
 ">
   {/* Content */}
 </div>
 ```
 
-### Button Component (Primary - Neon Cyan)
+### Button Component (Primary - Sky Accent)
 ```tsx
 <button className="
-  px-4 py-2
-  bg-neon-cyan/10
-  border border-neon-cyan/50
-  text-neon-cyan
-  rounded-lg
-  hover:bg-neon-cyan/20
-  hover:shadow-neon-cyan
-  focus:outline-none
-  focus:ring-2 focus:ring-neon-cyan/50
-  transition-all duration-200
-  font-medium
+  px-6 py-2.5
+  rounded-full
+  bg-ink
+  text-white
+  text-xs
+  font-semibold
+  hover:opacity-90
+  focus-visible:outline-none
+  focus-visible:ring-2
+  focus-visible:ring-skyAccent
+  focus-visible:ring-offset-2
+  transition-all
   uppercase tracking-wide
 ">
   Button Text
 </button>
 ```
 
-### Button Component (Secondary - Purple)
+### Button Component (Secondary)
 ```tsx
 <button className="
   px-4 py-2
-  bg-neon-purple/10
-  border border-neon-purple/50
-  text-neon-purple
-  rounded-lg
-  hover:bg-neon-purple/20
-  hover:shadow-neon-purple
-  focus:outline-none
-  focus:ring-2 focus:ring-neon-purple/50
-  transition-all duration-200
+  rounded-full
+  bg-surface
+  border border-hairline
+  text-ink
+  text-xs
   font-medium
+  hover:bg-hairline
+  focus-visible:outline-none
+  focus-visible:ring-2
+  focus-visible:ring-skyAccent
+  transition-colors
 ">
   Secondary
 </button>
 ```
 
-### Input/Textarea Component
+### Input/Search Component
 ```tsx
 <input className="
   w-full
-  bg-blueprint-900/50
-  border border-ghost/20
-  text-bone
-  rounded-lg
-  px-3 py-2
-  placeholder-ghost/40
+  bg-white
+  border border-hairline
+  text-ink
+  rounded-full
+  px-4 py-2.5
+  text-sm
+  font-mono
+  placeholder:text-muted
   focus:outline-none
-  focus:border-neon-cyan/50
-  focus:ring-2 focus:ring-neon-cyan/20
-  transition-all duration-200
-  font-mono text-sm
-  caret-neon-cyan
+  focus:ring-2
+  focus:ring-skyAccent
+  focus:border-transparent
+  transition-all
+  caret-skyAccent
 " />
 ```
 
@@ -205,29 +183,28 @@ export default config;
 ```tsx
 <span className="
   inline-block
-  px-2 py-1
-  bg-neon-green/10
-  border border-neon-green/50
-  text-neon-green
+  px-2.5 py-1
+  bg-stageSky
+  border border-hairline
+  text-skyAccent
   rounded-md
   text-xs
   font-mono
-  uppercase tracking-wider
+  font-semibold
 ">
   Status
 </span>
 ```
 
-### Alert/Warning Component
+### Alert Component (Error/Crimson)
 ```tsx
 <div className="
   p-4
-  bg-neon-red/5
-  border-l-4 border-neon-red/50
+  bg-white
+  border-l-4 border-crimson
   rounded-r-lg
-  text-neon-red
-  font-mono text-sm
-  backdrop-blur-sm
+  text-crimson
+  text-sm
 ">
   Alert message
 </div>
@@ -236,15 +213,15 @@ export default config;
 ### Code Block Component
 ```tsx
 <pre className="
-  bg-blueprint-950/80
-  border border-neon-cyan/10
-  rounded-lg
+  bg-white
+  border border-hairline
+  rounded-2xl
   p-4
   overflow-x-auto
-  text-neon-green
+  text-ink
   font-mono text-sm
   leading-relaxed
-  backdrop-blur-sm
+  shadow-sm
 ">
   {code}
 </pre>
@@ -255,23 +232,20 @@ export default config;
 <div className="
   animate-spin
   w-8 h-8
-  border-2 border-ghost/20
-  border-t-neon-cyan
+  border-2 border-hairline
+  border-t-skyAccent
   rounded-full
 "/>
 ```
 
 ## Layout Patterns
 
-### Main Container (Full Height Dark)
+### Main Container (Full Height White)
 ```tsx
 <div className="
   min-h-screen
-  bg-gradient-to-b
-  from-blueprint-950
-  via-blueprint-900
-  to-black
-  text-bone
+  bg-canvas
+  text-ink
 ">
   {/* Content */}
 </div>
@@ -280,11 +254,11 @@ export default config;
 ### Grid Layout (Two Column)
 ```tsx
 <div className="
-  grid grid-cols-1 md:grid-cols-3 gap-4
+  grid grid-cols-1 md:grid-cols-3 gap-6
   min-h-screen
-  bg-blueprint-950
+  bg-canvas
 ">
-  <aside className="md:col-span-1 bg-blueprint-900/50 border-r border-ghost/10">
+  <aside className="md:col-span-1 bg-surface border-r border-hairline">
     {/* Sidebar */}
   </aside>
   <main className="md:col-span-2 p-6">
@@ -297,13 +271,12 @@ export default config;
 ```tsx
 <div className="
   w-full h-screen
-  bg-blueprint-950
-  border border-neon-cyan/10
-  rounded-lg
+  bg-white
+  border border-hairline
+  rounded-2xl
   overflow-hidden
   relative
 ">
-  <div className="absolute inset-0 bg-circuit-pattern opacity-5" />
   {/* React Flow goes here */}
 </div>
 ```
@@ -312,26 +285,32 @@ export default config;
 
 ### Headings
 ```tsx
-// H1
-<h1 className="text-4xl font-bold text-bone mb-4">Main Title</h1>
+// H1 - Display heading
+<h1 className="font-display text-5xl sm:text-6xl font-bold leading-tight text-ink">
+  Main Title
+</h1>
 
-// H2
-<h2 className="text-2xl font-bold text-neon-cyan mb-3">Section Title</h2>
+// H2 - Section heading
+<h2 className="font-display text-3xl sm:text-4xl font-bold text-ink mb-3">
+  Section Title
+</h2>
 
-// H3
-<h3 className="text-lg font-semibold text-ghost mb-2">Subsection</h3>
+// H3 - Subsection
+<h3 className="font-display text-lg font-bold text-ink mb-2">
+  Subsection
+</h3>
 ```
 
 ### Body Text
 ```tsx
 // Primary text
-<p className="text-base text-bone">Primary content text</p>
+<p className="text-base text-ink leading-relaxed">Primary content text</p>
 
 // Secondary text
-<p className="text-sm text-ghost">Secondary information</p>
+<p className="text-sm text-muted">Secondary information</p>
 
 // Code/Mono text
-<code className="font-mono text-sm text-neon-green bg-blueprint-900/50 px-2 py-1 rounded">
+<code className="font-mono text-xs bg-surface px-2 py-1 rounded text-ink">
   codeExample()
 </code>
 ```
@@ -343,13 +322,12 @@ export default config;
 <div className="
   group
   cursor-pointer
-  hover:bg-blueprint-800/50
-  hover:border-neon-cyan/40
-  hover:shadow-glow-sm
-  transition-all duration-200
+  hover:bg-surface
+  hover:border-hairline
+  transition-colors
 ">
   {/* Content */}
-  <span className="group-hover:text-neon-cyan transition-colors">
+  <span className="group-hover:text-skyAccent transition-colors">
     Hovered text
   </span>
 </div>
@@ -360,9 +338,8 @@ export default config;
 <button className="
   focus:outline-none
   focus-visible:ring-2
-  focus-visible:ring-neon-cyan
+  focus-visible:ring-skyAccent
   focus-visible:ring-offset-2
-  focus-visible:ring-offset-blueprint-900
   transition-all
 ">
   Focusable element
@@ -373,11 +350,11 @@ export default config;
 ```tsx
 <a className="
   px-3 py-2
-  text-ghost
-  hover:text-neon-cyan
-  data-[active=true]:text-neon-cyan
+  text-muted
+  hover:text-ink
+  data-[active=true]:text-skyAccent
   data-[active=true]:border-b-2
-  data-[active=true]:border-neon-cyan
+  data-[active=true]:border-skyAccent
   transition-colors
 ">
   Navigation item
@@ -386,29 +363,28 @@ export default config;
 
 ## Animation Guidelines
 
-### Pulse Animation (Breathing effect)
+Animations di Necro-Docs menggunakan easing cubic-bezier(0.22, 1, 0.36, 1) untuk smooth, natural motion.
+
+### Smooth Fade & Scale
 ```tsx
-<div className="animate-pulse-cyan">
-  Breathing element
+<div className="
+  opacity-0 scale-95
+  transition duration-300
+  group-hover:opacity-100 group-hover:scale-100
+">
+  Animated content
 </div>
 ```
 
-### Flicker Animation (Digital glitch)
-```tsx
-<span className="animate-flicker text-neon-cyan">
-  Glitch text
-</span>
-```
-
-### Scan Line Animation (CRT effect)
+### Scrolly Animation (Stagger Effect)
 ```tsx
 <div className="
-  absolute inset-0
-  bg-gradient-to-b
-  from-transparent via-neon-cyan/5 to-transparent
-  animate-scan-line
-  pointer-events-none
-"/>
+  opacity-0 translate-y-4
+  transition duration-500 ease-out
+  group-hover:opacity-100 group-hover:translate-y-0
+">
+  Staggered content
+</div>
 ```
 
 ## Responsive Design
@@ -431,27 +407,27 @@ export default config;
   grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4
   gap-4 md:gap-6 lg:gap-8
 ">
-  {items.map(item => (/* card */)}
+  {items.map(item => <Card key={item.id} {...item} />)}
 </div>
 ```
 
-## Dark Mode Optimization
+## Light Mode Optimization
 
-All components are designed for dark mode by default. No need for additional dark: prefixes since the entire app uses dark theme.
+Semua components dirancang untuk light mode dengan white/light gray backgrounds dan dark text.
 
-Ensure sufficient contrast:
-- Text on backgrounds: minimum 4.5:1 ratio for readability
-- Neon colors for interactive elements (min 3:1)
-- Use bone (#e8e8e8) for primary text
-- Use ghost (#a0a0a0) for secondary text
+Contrast guidelines:
+- Text on backgrounds: minimum 4.5:1 ratio untuk readability
+- Primary text: `text-ink` (#111113)
+- Secondary text: `text-muted` (#686A72)
+- Links & interactive: `text-skyAccent` (#0284C7)
 
 ## Performance Considerations
 
-- Use `bg-gradient-to-br` instead of complex gradients
-- Limit number of animated elements on screen
-- Use `will-change` for heavily animated elements
-- Lazy load heavy backgrounds for mobile
-- Use CSS variables for theme switching (if needed in future)
+- Gunakan native CSS transitions untuk smooth, GPU-accelerated motion
+- Batasi jumlah animated elements on screen
+- Gunakan `will-change` untuk frequently animated elements
+- Lazy load heavy backgrounds untuk mobile
+- Prefer box-shadows yang subtle over complex gradients
 
 ---
 

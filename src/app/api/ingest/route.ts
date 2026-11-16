@@ -97,7 +97,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       {
         success: true,
         data,
-        meta: { timestamp: Date.now(), duration: data.metadata.processingDurationMs },
+        meta: { timestamp: Date.now(), duration: data.metadata!.processingDurationMs },
       },
       { status: 200 },
     );
