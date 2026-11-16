@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -100,7 +100,7 @@ function PresetChoices({ onChoose }: { onChoose?: (id: PresetId) => void }) {
 }
 
 const GRAPH_WIDTH = 1200;
-const GRAPH_HEIGHT = 1100;
+const GRAPH_HEIGHT = 1600;
 const NODE_WIDTH = 226;
 const NODE_HEIGHT = 132;
 
@@ -345,7 +345,7 @@ function GraphViewport({
         className="paper-grid relative min-h-0 flex-1 select-none touch-none cursor-grab overflow-hidden active:cursor-grabbing"
       >
         {specimen ? (
-          <div className="absolute left-1/2 top-1/2 h-[1100px] w-[1200px] motion-reduce:transition-none" style={{ willChange: 'transform', transform: `translate(-50%, -50%) translate3d(${camera.x + offset.x}px, ${camera.y + offset.y}px, 0) scale(${camera.scale})` }}>
+          <div className="absolute left-1/2 top-1/2 h-[1600px] w-[1200px] motion-reduce:transition-none" style={{ willChange: 'transform', transform: `translate(-50%, -50%) translate3d(${camera.x + offset.x}px, ${camera.y + offset.y}px, 0) scale(${camera.scale})` }}>
             <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible" viewBox={`0 0 ${GRAPH_WIDTH} ${GRAPH_HEIGHT}`} role="img" aria-label="Edges between source files">
               {validEdges.map((edge) => {
                 const source = positions.get(edge.source);
@@ -452,7 +452,7 @@ export function LegacySeanceSlot({ specimen, onQuickQuestion, onSubmit }: { spec
     };
     recognitionRef.current = recognition;
     setIsListening(true);
-    setTranscript('Listeningâ€¦');
+    setTranscript('Listening…');
     try { recognition.start(); } catch { showSpeechError('generic'); }
   };
 
@@ -477,9 +477,9 @@ export function LegacySeanceSlot({ specimen, onQuickQuestion, onSubmit }: { spec
         </div>
         <form onSubmit={handleSubmit} className="mt-3 flex items-center gap-3 border-t border-hairline pt-3">
           <label htmlFor="seance-question" className="sr-only">Ask a question</label>
-          <input ref={inputRef} id="seance-question" name="seance-question" type="text" className="min-w-0 flex-1 bg-transparent px-1 py-2 text-xs text-ink placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent" placeholder="Ask the code archaeologistâ€¦" />
+          <input ref={inputRef} id="seance-question" name="seance-question" type="text" className="min-w-0 flex-1 bg-transparent px-1 py-2 text-xs text-ink placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent" placeholder="Ask the code archaeologist…" />
           <button type="submit" className="rounded-full bg-ink px-3 py-2 text-xs font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">Send</button>
-          <button type="button" onClick={toggleRecognition} disabled={!speechRecognition && !isListening} aria-label={isListening ? 'Listeningâ€¦' : 'Ask by voice'} aria-pressed={isListening} title={speechRecognition ? (isListening ? 'Stop listening' : 'Ask by voice') : 'Voice input is not supported in this browser'} className="rounded-full bg-ink p-2 text-white disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent"><Mic size={14} aria-hidden="true" /></button>
+          <button type="button" onClick={toggleRecognition} disabled={!speechRecognition && !isListening} aria-label={isListening ? 'Listening…' : 'Ask by voice'} aria-pressed={isListening} title={speechRecognition ? (isListening ? 'Stop listening' : 'Ask by voice') : 'Voice input is not supported in this browser'} className="rounded-full bg-ink p-2 text-white disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent"><Mic size={14} aria-hidden="true" /></button>
           <div aria-hidden="true" className="flex h-5 items-center gap-1 px-1">{[2, 3.5, 5, 3, 4, 2.5, 4].map((height, index) => <span key={index} className="w-0.5 bg-ink" style={{ height: `${height * 4}px` }} />)}</div>
         </form>
       </div>
@@ -544,7 +544,7 @@ function DetailPanel({ specimen, selectedNodeId, onClose, onBlastRadius, onSelec
           {node && meta && (
             <p className="mt-1 font-mono text-[12px] font-semibold">
               <span className={meta.textClass}>{node.rotScore}</span>
-              <span className="ml-1 text-[10px] font-normal text-muted">/ 100 rot · {meta.label}</span>
+              <span className="ml-1 text-[10px] font-normal text-muted">/ 100 rot  · {meta.label}</span>
             </p>
           )}
           {node && <p className="mt-2 text-[13px] leading-[1.45] font-normal text-muted">{node.kind === 'ingested' ? node.summary : 'Preset specimen with curated findings and source context.'}</p>}
@@ -612,6 +612,11 @@ function WorkspaceContent() {
       setSpecimen(analyzed);
       setSelectedNodeId(hotspot?.id ?? null);
       setRequestState({ status: 'success', repository: analysis.title });
+      const snapshot = { repository: analysis.title, branch: analysis.defaultBranch, files: analyzed.nodes.length, averageRot: analysis.overallRot, savedAt: Date.now() };
+      try {
+        const history = JSON.parse(localStorage.getItem('necro:audit-history') || '[]') as typeof snapshot[];
+        localStorage.setItem('necro:audit-history', JSON.stringify([snapshot, ...history.filter((item) => item.repository !== snapshot.repository)].slice(0, 10)));
+      } catch { /* history is optional */ }
     };
 
     // The landing page already analyzed this repository and left the result in sessionStorage.
@@ -713,14 +718,6 @@ function WorkspaceContent() {
     const link = document.createElement('a'); link.href = url; link.download = `${specimen.title.replace(/[^a-z0-9]+/gi, '-')}.${format === 'json' ? 'json' : 'md'}`; link.click(); URL.revokeObjectURL(url);
   };
 
-  const saveAuditSnapshot = () => {
-    if (!specimen) return;
-    const snapshot = { files: specimen.nodes.length, averageRot: Math.round(specimen.nodes.reduce((sum, node) => sum + node.rotScore, 0) / Math.max(1, specimen.nodes.length)), savedAt: Date.now() };
-    const history = JSON.parse(localStorage.getItem('necro:audit-history') || '[]') as typeof snapshot[];
-    localStorage.setItem('necro:audit-history', JSON.stringify([snapshot, ...history].slice(0, 10)));
-    setPreviousAudit(history[0] ?? null);
-  };
-
   const loadPreviousAudit = () => {
     const history = JSON.parse(localStorage.getItem('necro:audit-history') || '[]') as { files: number; averageRot: number }[];
     setPreviousAudit(history[0] ?? null);
@@ -754,8 +751,8 @@ function WorkspaceContent() {
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           {summary && <span className="hidden font-mono text-[10px] text-muted sm:inline">{summary}</span>}
                     {requestState.status === 'success' && requestState.showingSample && <span className="hidden font-mono text-[10px] text-muted sm:inline">Showing sample data</span>}
-          <button type="button" aria-pressed={isolateHotspots} onClick={() => setIsolateHotspots((value) => !value)} className={`rounded-full border px-2.5 py-1 text-[12px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent ${isolateHotspots ? 'border-ink bg-ink text-white' : 'border-hairline text-ink hover:bg-surface'}`}>
-            Isolate hotspots
+          <button type="button" aria-pressed={isolateHotspots} title="Dim files with rot score below 70" onClick={() => setIsolateHotspots((value) => !value)} className={`rounded-full border px-2.5 py-1 text-[12px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent ${isolateHotspots ? 'border-ink bg-ink text-white' : 'border-hairline text-ink hover:bg-surface'}`}>
+            Focus hotspots
           </button>
           <button type="button" aria-label="Reset graph view" onClick={() => animateCamera({ x: 0, y: 20, scale: 0.92 })} className="flex items-center gap-1.5 rounded-full border border-hairline px-2 py-0.5 text-[12px] font-normal text-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">
             <RotateCcw size={13} aria-hidden="true" />
@@ -775,14 +772,13 @@ function WorkspaceContent() {
         <button type="button" onClick={() => animateCamera({ ...camera, scale: Math.min(1.5, camera.scale + 0.1) })} className="rounded-full border border-hairline p-2" aria-label="Zoom in"><ZoomIn size={14} /></button><button type="button" onClick={() => animateCamera({ ...camera, scale: Math.max(0.35, camera.scale - 0.1) })} className="rounded-full border border-hairline p-2" aria-label="Zoom out"><ZoomOut size={14} /></button>
         <button type="button" onClick={() => animateCamera({ x: 0, y: 20, scale: 0.92 })} className="rounded-full border border-hairline p-2" aria-label="Fit graph"><Maximize2 size={14} /></button>
         <button type="button" onClick={() => exportReport('md')} className="flex items-center gap-1 rounded-full border border-hairline px-2 py-0.5 text-[12px] font-normal"><Download size={13} />Export MD</button><button type="button" onClick={() => exportReport('json')} className="rounded-full border border-hairline px-2 py-0.5 text-[12px] font-normal">JSON</button>
-        <button type="button" onClick={saveAuditSnapshot} className="rounded-full border border-hairline px-2 py-0.5 text-[12px] font-normal">Save snapshot</button>
         <button type="button" onClick={loadPreviousAudit} className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[12px] font-normal ${showComparison ? 'border-ink bg-ink text-white' : 'border-hairline'}`}><GitCompare size={13} />Compare</button>
       </div>}
-      {showComparison && specimen && <div className="z-10 border-b border-hairline bg-surface px-5 py-2 text-xs text-muted">Current audit: <strong className="text-ink">{specimen.nodes.length} files, {Math.round(specimen.nodes.reduce((sum, node) => sum + node.rotScore, 0) / Math.max(1, specimen.nodes.length))} average rot</strong>{previousAudit ? <> Â· Previous: <strong className="text-ink">{previousAudit.files} files, {previousAudit.averageRot} average rot</strong></> : ' Â· Save a snapshot to compare future audits.'}</div>}
+      {showComparison && specimen && <div className="z-10 border-b border-hairline bg-surface px-5 py-2 text-xs text-muted">Current audit: <strong className="text-ink">{specimen.nodes.length} files, {Math.round(specimen.nodes.reduce((sum, node) => sum + node.rotScore, 0) / Math.max(1, specimen.nodes.length))} average rot</strong>{previousAudit ? <> · Previous: <strong className="text-ink">{previousAudit.files} files, {previousAudit.averageRot} average rot</strong></> : ' · No previous audit for this repository yet.'}</div>}
 
       {requestState.status === 'loading' && (
         <div role="status" aria-live="polite" className="border-b border-hairline bg-surface px-5 py-3 font-mono text-xs">
-          <div>Analyzing repositoryâ€¦ {requestState.repository}</div>
+          <div>Analyzing repository… {requestState.repository}</div>
           <button type="button" onClick={cancelIngest} className="mt-2 rounded-full border border-ink px-3 py-1.5 font-sans text-xs text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">Cancel</button>
           {requestState.isSlow && <><p className="mt-3">This is taking longer than usual.</p><PresetChoices onChoose={choosePreset} /></>}
         </div>
@@ -825,11 +821,12 @@ function WorkspaceContent() {
 
 export default function WorkspacePage() {
   return (
-    <Suspense fallback={<main className="flex h-screen w-screen items-center justify-center bg-canvas font-mono text-xs text-muted">Loading workspaceâ€¦</main>}>
+    <Suspense fallback={<main className="flex h-screen w-screen items-center justify-center bg-canvas font-mono text-xs text-muted">Loading workspace…</main>}>
       <WorkspaceContent />
     </Suspense>
   );
 }
+
 
 
 

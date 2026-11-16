@@ -71,7 +71,7 @@ const LONG_FUNCTION_LINES = 60;
 const RAW_HOST = 'https://raw.githubusercontent.com';
 const COLUMN_X = [110, 390, 670, 950] as const;
 const ROW_TOP = 90;
-const ROW_GAP = 155;
+const ROW_GAP = 170;
 
 const EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.py', '.go'] as const;
 const EXCLUDED_DIRS = new Set(['node_modules', '.next', 'dist', 'build', 'vendor', '.git', '__pycache__', '__tests__', 'tests', 'test']);
