@@ -65,7 +65,7 @@ export function buildEdges(nodes: IngestNode[], relations: Map<string, Relations
       if (!target || target === node.id) continue;
       const id = `${node.id}→${target}`;
       const existing = edges.get(id);
-      if (existing) existing.metadata!.importCount += 1;
+      if (existing) existing.metadata.importCount += 1;
       else
         edges.set(id, {
           id,
@@ -77,11 +77,11 @@ export function buildEdges(nodes: IngestNode[], relations: Map<string, Relations
         });
     }
   }
-  return [...edges.values()].sort((a, b) => (a.id! < b.id! ? -1 : a.id! > b.id! ? 1 : 0));
+  return [...edges.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
 export function summarize(nodes: IngestNode[]): { fileCount: number; averageRotScore: number } {
-  const sum = nodes.reduce((s, n) => s + (n.rotScore || 0), 0);
+  const sum = nodes.reduce((s, n) => s + n.rotScore, 0);
   return { fileCount: nodes.length, averageRotScore: nodes.length ? round2(sum / nodes.length) : 0 };
 }
 
@@ -97,7 +97,7 @@ export function validateIngestResult(r: IngestResult): void {
     if (!str(n.id) || !str(n.path) || !str(n.name)) v.push(`${w}: id/path/name must be non-empty strings`);
     if (ids.has(n.id)) v.push(`${w}: duplicate id`);
     ids.add(n.id);
-    if (!LANGUAGES.includes(n.language!)) v.push(`${w}: invalid language`);
+    if (!LANGUAGES.includes(n.language)) v.push(`${w}: invalid language`);
     if (!num(n.rotScore) || n.rotScore < 0 || n.rotScore > 100) v.push(`${w}: rotScore out of [0,100]`);
     if (!num(n.linesOfCode) || n.linesOfCode < 0) v.push(`${w}: invalid linesOfCode`);
     const m = n.summaryMetrics;
@@ -118,7 +118,7 @@ export function validateIngestResult(r: IngestResult): void {
     if (typeof e.label !== 'string') v.push(`${w}: label must be a string`);
     if (!num(e.metadata?.importCount) || e.metadata.importCount < 1) v.push(`${w}: importCount must be >= 1`);
   }
-  const md = r.metadata!;
+  const md = r.metadata;
   if (md.fileCount !== r.nodes.length) v.push('metadata.fileCount must equal nodes.length');
   if (!num(md.averageRotScore) || md.averageRotScore < 0 || md.averageRotScore > 100)
     v.push('metadata.averageRotScore out of [0,100]');

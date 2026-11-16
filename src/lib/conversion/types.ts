@@ -1,9 +1,4 @@
-import type {
-  ApiResponse,
-  IngestEdge,
-  IngestNode,
-  IngestResult,
-} from '@/lib/types';
+import type { ApiResponse } from '@/lib/types';
 
 export type PresetId = 'payment' | 'scraper' | 'realtime';
 
@@ -28,26 +23,19 @@ export interface PresetWorkspaceNode extends WorkspaceNodeBase {
   codeExcerpt: string;
 }
 
+/** A file from a real repository analysis (`POST /api/ingest`). */
 export interface IngestedWorkspaceNode extends WorkspaceNodeBase {
   kind: 'ingested';
-  language: IngestNode['language'];
-  nestingDepth: number;
-  commentRatio: number;
-  importCount: number;
-  exportCount: number;
-  fileSize: number;
-  rawContent: string;
-  isTruncated: boolean;
+  lastCommit: string;
+  findings: string[];
+  codeExcerpt: string;
 }
-
 export type WorkspaceNode = PresetWorkspaceNode | IngestedWorkspaceNode;
 
 export interface WorkspaceEdge {
   id: string;
   source: string;
   target: string;
-  type?: IngestEdge['type'];
-  label?: string;
 }
 
 export interface PresetQuickQuestion {
@@ -71,11 +59,13 @@ export interface IngestedSpecimen {
   kind: 'ingested';
   title: string;
   summary: string;
+  defaultBranch: string;
+  /** Canonical `https://github.com/{owner}/{repo}`. */
+  repositoryUrl: string;
+  overallRot: number;
   nodes: IngestedWorkspaceNode[];
   edges: WorkspaceEdge[];
-  metadata: IngestResult['metadata'];
 }
-
 export type Specimen = PresetSpecimen | IngestedSpecimen;
 
 export type IngestLoadingState = {
@@ -130,4 +120,3 @@ export interface SpotlightState {
   selectedNodeId: string | null;
 }
 
-export type IngestedSpecimenSource = IngestResult;

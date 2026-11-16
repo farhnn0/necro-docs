@@ -10,7 +10,13 @@ import {
   Mic,
   Network,
 } from 'lucide-react';
-import { scrollyStep, workspaceTargetHref } from '@/lib/conversion/helpers';
+import {
+  ACTIVE_REPO_STORAGE_KEY,
+  ingestErrorMessage,
+  isRepoAnalysis,
+  scrollyStep,
+  workspaceTargetHref,
+} from '@/lib/conversion/helpers';
 
 const walkthroughSteps = [
   ['01 · Repository input', 'Paste any GitHub repository URL', 'Drop a public repository link. Necro-Docs fetches the file tree via REST API in milliseconds without cloning to disk.'],
@@ -25,6 +31,21 @@ const presets = [
   ['realtime', '26% infected · Node.js', 'edge-socket-relay', 'Clean WebSocket pub/sub broker with isolated heartbeat cleanup and well-typed payloads.', 'text-emerald'],
 ] as const;
 
+/** The analysis is one request, so these stages are paced by time while it runs. */
+const analysisStages = [
+  'Resolving default branch',
+  'Fetching file tree',
+  'Reading source files',
+  'Scanning imports and code rot',
+] as const;
+const STAGE_INTERVAL_MS = 1100;
+const REQUEST_TIMEOUT_MS = 65_000;
+
+type AnalysisState =
+  | { status: 'idle' }
+  | { status: 'loading'; stage: number }
+  | { status: 'error'; message: string };
+
 function WorkspaceLink({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return <a href={workspaceTargetHref({ kind: 'preset', id: 'payment' })} className={`${className} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent`}>{children}</a>;
 }
@@ -33,6 +54,10 @@ export default function Home() {
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [progress, setProgress] = useState(0);
   const frame = useRef<number | null>(null);
+  const [analysis, setAnalysis] = useState<AnalysisState>({ status: 'idle' });
+  const analysisController = useRef<AbortController | null>(null);
+
+  useEffect(() => () => analysisController.current?.abort(), []);
 
   useEffect(() => {
     const update = () => {
@@ -59,14 +84,54 @@ export default function Home() {
     };
   }, []);
 
-  function submitRepo(event: FormEvent<HTMLFormElement>) {
+  async function handleCustomRepo(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (analysis.status === 'loading') return;
     const value = new FormData(event.currentTarget).get('repository')?.toString().trim();
-    window.location.href = workspaceTargetHref(value
-      ? { kind: 'repository', repository: value }
-      : { kind: 'preset', id: 'payment' });
-  }
+    if (!value) {
+      window.location.href = workspaceTargetHref({ kind: 'preset', id: 'payment' });
+      return;
+    }
 
+    const controller = new AbortController();
+    analysisController.current?.abort();
+    analysisController.current = controller;
+    setAnalysis({ status: 'loading', stage: 0 });
+    const ticker = window.setInterval(() => {
+      setAnalysis((state) => state.status === 'loading'
+        ? { status: 'loading', stage: Math.min(state.stage + 1, analysisStages.length - 1) }
+        : state);
+    }, STAGE_INTERVAL_MS);
+    const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    try {
+      const response = await fetch('/api/ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoUrl: value }),
+        signal: controller.signal,
+      });
+      const payload: unknown = await response.json().catch(() => null);
+      if (!response.ok || !isRepoAnalysis(payload)) {
+        const code = (payload as { error?: { code?: string } } | null)?.error?.code;
+        setAnalysis({ status: 'error', message: ingestErrorMessage(response.ok ? undefined : code) });
+        return;
+      }
+      try {
+        window.sessionStorage.setItem(ACTIVE_REPO_STORAGE_KEY, JSON.stringify(payload));
+      } catch {
+        // Storage is optional: the workspace re-runs the analysis when nothing is stored.
+      }
+      window.location.assign(workspaceTargetHref({ kind: 'repository', repository: payload.title }));
+    } catch {
+      if (analysisController.current === controller) {
+        setAnalysis({ status: 'error', message: controller.signal.aborted ? 'The analysis timed out.' : 'The server could not be reached.' });
+      }
+    } finally {
+      window.clearInterval(ticker);
+      window.clearTimeout(timeout);
+    }
+  }
   return (
     <main className="min-h-screen bg-canvas font-sans text-ink">
       <header className="mx-auto flex h-20 w-full max-w-6xl items-center justify-between px-6">
@@ -82,10 +147,25 @@ export default function Home() {
           <p className="mb-3 text-xs font-semibold text-skyAccent">Automated codebase archaeology</p>
           <h1 className="font-display text-4xl font-bold leading-[1.08] tracking-tight sm:text-6xl">Dissect legacy codebases<br />in minutes</h1>
           <p className="mx-auto mt-4 max-w-xl text-base leading-relaxed text-muted sm:text-lg">Map hidden module dependencies, surface structural decay scores, and interrogate fragile logic by voice before refactoring a single line.</p>
-          <form onSubmit={submitRepo} aria-label="Audit a GitHub repository" className="mx-auto mt-8 flex max-w-xl flex-col items-center gap-2 rounded-full border border-hairline bg-surface p-1.5 sm:flex-row">
-            <label htmlFor="repository" className="sr-only">GitHub repository URL</label><input id="repository" name="repository" type="text" placeholder="github.com/acme-corp/legacy-payment-monolith" className="w-full flex-1 bg-transparent px-4 py-2 text-sm font-mono text-ink placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent" />
-            <button type="submit" className="w-full shrink-0 rounded-full bg-ink px-6 py-2.5 text-xs font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent sm:w-auto">Audit repository</button>
+          <form onSubmit={handleCustomRepo} aria-label="Audit a GitHub repository" aria-busy={analysis.status === 'loading'} className="mx-auto mt-8 flex max-w-xl flex-col items-center gap-2 rounded-full border border-hairline bg-surface p-1.5 sm:flex-row">
+            <label htmlFor="repository" className="sr-only">GitHub repository URL</label><input id="repository" name="repository" type="text" readOnly={analysis.status === 'loading'} placeholder="github.com/acme-corp/legacy-payment-monolith" className="w-full flex-1 bg-transparent px-4 py-2 text-sm font-mono text-ink placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent" />
+            <button type="submit" disabled={analysis.status === 'loading'} className="w-full shrink-0 rounded-full bg-ink px-6 py-2.5 text-xs font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent disabled:cursor-wait disabled:opacity-80 sm:w-auto">{analysis.status === 'loading' ? 'Dissecting repository...' : 'Audit repository'}</button>
           </form>
+          {analysis.status === 'loading' && (
+            <ol role="status" aria-live="polite" aria-label="Analysis progress" className="mx-auto mt-4 flex max-w-xl flex-wrap justify-center gap-x-5 gap-y-1 font-mono text-[11px]">
+              {analysisStages.map((label, index) => {
+                const state = index < analysis.stage ? 'done' : index === analysis.stage ? 'active' : 'pending';
+                return <li key={label} aria-current={state === 'active' ? 'step' : undefined} className={state === 'pending' ? 'text-muted/60' : state === 'done' ? 'text-muted' : 'animate-pulse font-semibold text-ink'}>{state === 'done' ? '✓ ' : state === 'active' ? '› ' : '· '}{label}</li>;
+              })}
+            </ol>
+          )}
+          {analysis.status === 'error' && (
+            <div role="alert" className="mx-auto mt-4 max-w-xl rounded-2xl border border-crimson/30 bg-surface px-4 py-3 text-left text-xs">
+              <p className="font-medium text-crimson">{analysis.message}</p>
+              <p className="mt-2 text-muted">Or explore a sample specimen instead:</p>
+              <div className="mt-1.5 flex flex-wrap gap-2">{presets.map(([id, , name]) => <a key={id} href={workspaceTargetHref({ kind: 'preset', id })} className="rounded-full border border-hairline bg-white px-3 py-1 font-mono text-[11px] hover:bg-hairline/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">{name}</a>)}</div>
+            </div>
+          )}
           <div className="mt-7 flex flex-wrap justify-center gap-6 text-xs font-medium text-muted sm:gap-10"><span className="flex items-center gap-2"><GitFork size={14} className="text-ink" />Zero-clone GitHub tree scan</span><span className="flex items-center gap-2"><Activity size={14} className="text-ink" />File-level code-rot scoring</span><span className="flex items-center gap-2"><Mic size={14} className="text-ink" />Voice blast-radius queries</span></div>
         </div>
         <div className="relative mx-auto mt-14 max-w-5xl">

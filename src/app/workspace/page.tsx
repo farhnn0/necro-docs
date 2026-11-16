@@ -1,15 +1,17 @@
-'use client';
+﻿'use client';
 
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
+import { Input } from '@/components/ui/input';
 import { ChevronLeft, Download, GitCompare, Maximize2, Mic, RotateCcw, Search, ZoomIn, ZoomOut } from 'lucide-react';
-import { useMemo } from 'react';
 import {
-  convertIngestResult,
+  ACTIVE_REPO_STORAGE_KEY,
+  convertRepoAnalysis,
   createIngestErrorState,
-  deriveRepositoryTitle,
+  isRepoAnalysis,
+  readActiveRepo,
   rotScoreTier,
   quickQuestions,
 } from '@/lib/conversion/helpers';
@@ -18,8 +20,9 @@ import {
   isPresetId,
   PRESET_IDS,
 } from '@/lib/conversion/specimens';
-import type { IngestErrorState, PresetId, Specimen } from '@/lib/conversion/types';
-import type { ApiResponse, IngestResult } from '@/lib/types';
+import type { IngestedWorkspaceNode, IngestErrorState, PresetId, Specimen } from '@/lib/conversion/types';
+import type { RepoAnalysis } from '@/lib/repoAnalyzer';
+import type { ApiResponse } from '@/lib/types';
 import SeanceConsole from './SeanceConsole';
 
 const initialTranscript =
@@ -74,7 +77,7 @@ function PresetChoices({ onChoose }: { onChoose?: (id: PresetId) => void }) {
               className="rounded-2xl border border-hairline bg-white p-4 text-left transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent"
             >
               <span className="font-mono text-xs text-skyAccent">{specimen.summary}</span>
-              <span className="mt-2 block font-display text-sm font-bold">{specimen.title}</span>
+              <span className="mt-2 block font-display text-[13px] font-medium">{specimen.title}</span>
               <span className="mt-2 block text-xs leading-relaxed text-muted">{specimen.description}</span>
             </a>
           );
@@ -107,6 +110,7 @@ function GraphViewport({
   spotlightNodeIds,
   camera,
   isolateHotspots = false,
+  visibleNodeIds,
   onCameraChange,
   onSelectNode,
 }: {
@@ -115,8 +119,9 @@ function GraphViewport({
   spotlightNodeIds: string[];
   camera: { x: number; y: number; scale: number };
   isolateHotspots?: boolean;
+  visibleNodeIds?: Set<string>;
   onCameraChange: (camera: { x: number; y: number; scale: number }) => void;
-  onSelectNode: (nodeId: string) => void;
+  onSelectNode: (nodeId: string | null) => void;
 }) {
   const viewportRef = useRef<HTMLElement>(null);
   const dragRef = useRef<{ pointerId: number; x: number; y: number; cameraX: number; cameraY: number } | null>(null);
@@ -149,6 +154,7 @@ function GraphViewport({
       onPointerDown={(event) => {
         const target = event.target as Element;
         if (target.closest('[data-graph-node]')) return;
+        onSelectNode(null);
         dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, cameraX: camera.x, cameraY: camera.y };
         viewportRef.current?.setPointerCapture(event.pointerId);
       }}
@@ -180,7 +186,7 @@ function GraphViewport({
     >
       {specimen ? (
         <div className="absolute left-1/2 top-1/2 h-[800px] w-[1200px] motion-reduce:transition-none" style={{ willChange: 'transform', transform: `translate(-50%, -50%) translate3d(${camera.x + offset.x}px, ${camera.y + offset.y}px, 0) scale(${camera.scale})` }}>
-          <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${GRAPH_WIDTH} ${GRAPH_HEIGHT}`} role="img" aria-label="Edges between source files">
+          <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible" viewBox={`0 0 ${GRAPH_WIDTH} ${GRAPH_HEIGHT}`} role="img" aria-label="Edges between source files">
             {validEdges.map((edge) => {
               const source = positions.get(edge.source);
               const target = positions.get(edge.target);
@@ -191,13 +197,14 @@ function GraphViewport({
               const targetY = target.position.y + NODE_HEIGHT / 2;
               const bend = Math.max(48, Math.abs(targetX - sourceX) * 0.45);
               const active = selectedNodeId === edge.source || selectedNodeId === edge.target || spotlight.has(edge.target);
-              return <path key={edge.id} d={`M ${sourceX} ${sourceY} C ${sourceX + bend} ${sourceY}, ${targetX - bend} ${targetY}, ${targetX} ${targetY}`} fill="none" stroke={active ? (spotlight.has(edge.target) ? '#0284C7' : '#111113') : '#D4D4D8'} strokeWidth={selectedNodeId && active ? 1.8 : 1.2} />;
+              const hidden = visibleNodeIds && (!visibleNodeIds.has(edge.source) || !visibleNodeIds.has(edge.target));
+              return <path key={edge.id} d={`M ${sourceX} ${sourceY} C ${sourceX + bend} ${sourceY}, ${targetX - bend} ${targetY}, ${targetX} ${targetY}`} fill="none" stroke={active ? (spotlight.has(edge.target) ? '#0284C7' : '#111113') : '#D4D4D8'} strokeWidth={selectedNodeId && active ? 1.8 : 1.2} opacity={hidden ? 0.08 : 1} />;
             })}
           </svg>
           {validNodes.map((node) => {
             const selected = node.id === selectedNodeId;
             const isSpotlight = spotlight.has(node.id);
-            const dimmed = isolateHotspots && node.rotScore < 70 && !selected && !isSpotlight;
+            const dimmed = (visibleNodeIds && !visibleNodeIds.has(node.id)) || (isolateHotspots && node.rotScore < 70 && !selected && !isSpotlight);
             const scoreClass = rotScoreTier(node.rotScore) === 'crimson' ? 'text-crimson' : 'text-ink';
             return (
               <article
@@ -217,7 +224,7 @@ function GraphViewport({
                   event.stopPropagation();
                   onSelectNode(node.id);
                 }}
-                className={`absolute flex h-[132px] w-[226px] select-text cursor-pointer flex-col justify-between rounded-2xl border bg-white p-4 shadow-sm transition-opacity ${selected ? 'border-2 border-ink' : isSpotlight ? 'border-2 border-skyAccent' : 'border-hairline'} ${dimmed ? 'opacity-[.22]' : 'opacity-100'}`}
+                className={`absolute flex h-[132px] w-[226px] select-text cursor-pointer flex-col justify-between rounded-2xl border bg-white p-3 shadow-sm transition-opacity ${selected ? 'border-2 border-ink' : isSpotlight ? 'border-2 border-skyAccent' : 'border-hairline'} ${dimmed ? 'opacity-[.22]' : 'opacity-100'}`}
                 style={{ left: node.position.x, top: node.position.y }}
               >
                 <div className="flex items-start justify-between gap-3 font-mono text-[10px] text-muted">
@@ -225,7 +232,7 @@ function GraphViewport({
                   <span className={`shrink-0 font-semibold ${scoreClass}`}>{node.rotScore} rot</span>
                 </div>
                 <div className="min-w-0">
-                  <h3 className="truncate font-display text-sm font-bold text-ink" title={node.name}>{node.name}</h3>
+                  <h3 className="truncate font-display text-[13px] font-semibold text-ink" title={node.name}>{node.name}</h3>
                   <p className="truncate font-mono text-[10px] text-muted" title={node.path}>{node.path}</p>
                 </div>
               </article>
@@ -300,7 +307,7 @@ export function LegacySeanceSlot({ specimen, onQuickQuestion, onSubmit }: { spec
     };
     recognitionRef.current = recognition;
     setIsListening(true);
-    setTranscript('Listening…');
+    setTranscript('Listeningâ€¦');
     try { recognition.start(); } catch { showSpeechError('generic'); }
   };
 
@@ -316,18 +323,18 @@ export function LegacySeanceSlot({ specimen, onQuickQuestion, onSubmit }: { spec
   };
 
   return (
-    <section aria-labelledby="seance-title" className="absolute bottom-6 left-1/2 z-10 w-[92%] max-w-xl -translate-x-1/2">
-      <div className="acctual-window rounded-3xl bg-white/95 p-4 backdrop-blur-md">
+    <section aria-labelledby="seance-title" className="absolute bottom-4 left-1/2 z-10 w-[86%] max-w-lg -translate-x-1/2">
+      <div className="acctual-window rounded-2xl bg-white/95 p-3 backdrop-blur-md">
         <h2 id="seance-title" className="sr-only">Seance console</h2>
         <p aria-live="polite" className="px-1 text-xs leading-relaxed text-ink">{transcript}</p>
-        <div className="mt-3 flex flex-wrap gap-2" aria-label="Quick questions">
-          {questions.map(({ question }) => <button key={question} type="button" onClick={() => onQuickQuestion?.(question)} className="rounded-full border border-hairline bg-surface px-3 py-1.5 text-left text-[11px] font-medium text-ink transition-colors hover:bg-hairline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">{question}</button>)}
+        <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Quick questions">
+          {questions.map(({ question }) => <button key={question} type="button" onClick={() => onQuickQuestion?.(question)} className="rounded-full border border-hairline bg-surface px-2.5 py-1 text-left text-[10px] font-medium text-ink transition-colors hover:bg-hairline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">{question}</button>)}
         </div>
         <form onSubmit={handleSubmit} className="mt-3 flex items-center gap-3 border-t border-hairline pt-3">
           <label htmlFor="seance-question" className="sr-only">Ask a question</label>
-          <input ref={inputRef} id="seance-question" name="seance-question" type="text" className="min-w-0 flex-1 bg-transparent px-1 py-2 text-xs text-ink placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent" placeholder="Ask the code archaeologist…" />
+          <input ref={inputRef} id="seance-question" name="seance-question" type="text" className="min-w-0 flex-1 bg-transparent px-1 py-2 text-xs text-ink placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent" placeholder="Ask the code archaeologistâ€¦" />
           <button type="submit" className="rounded-full bg-ink px-3 py-2 text-xs font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">Send</button>
-          <button type="button" onClick={toggleRecognition} disabled={!speechRecognition && !isListening} aria-label={isListening ? 'Listening…' : 'Ask by voice'} aria-pressed={isListening} title={speechRecognition ? (isListening ? 'Stop listening' : 'Ask by voice') : 'Voice input is not supported in this browser'} className="rounded-full bg-ink p-2 text-white disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent"><Mic size={14} aria-hidden="true" /></button>
+          <button type="button" onClick={toggleRecognition} disabled={!speechRecognition && !isListening} aria-label={isListening ? 'Listeningâ€¦' : 'Ask by voice'} aria-pressed={isListening} title={speechRecognition ? (isListening ? 'Stop listening' : 'Ask by voice') : 'Voice input is not supported in this browser'} className="rounded-full bg-ink p-2 text-white disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent"><Mic size={14} aria-hidden="true" /></button>
           <div aria-hidden="true" className="flex h-5 items-center gap-1 px-1">{[2, 3.5, 5, 3, 4, 2.5, 4].map((height, index) => <span key={index} className="w-0.5 bg-ink" style={{ height: `${height * 4}px` }} />)}</div>
         </form>
       </div>
@@ -335,82 +342,53 @@ export function LegacySeanceSlot({ specimen, onQuickQuestion, onSubmit }: { spec
   );
 }
 
-function DetailPanel({
-  specimen,
-  selectedNodeId,
-  onClose,
-}: {
+function DetailPanel({ specimen, selectedNodeId, onClose, onBlastRadius, onSelectNode }: {
   specimen: Specimen | null;
   selectedNodeId: string | null;
   onClose: () => void;
+  onBlastRadius: () => void;
+  onSelectNode: (nodeId: string) => void;
 }) {
+  const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [tab, setTab] = useState<'overview' | 'source'>('overview');
+  const [highlightLine, setHighlightLine] = useState<number | null>(null);
+  const codeRef = useRef<HTMLDivElement>(null);
   const node = specimen?.nodes.find((candidate) => candidate.id === selectedNodeId) ?? null;
-  const diagnosis = node?.kind === 'preset'
-    ? node.findings
-    : node && specimen?.kind === 'ingested'
-      ? [
-          `${node.rotScore >= 75 ? 'High' : 'Moderate'} structural rot score: ${node.rotScore} / 100.`,
-          `${node.nestingDepth} levels of nesting and ${(node.commentRatio * 100).toFixed(1)}% comments indicate the current structural shape.`,
-          `${specimen.edges.filter((edge) => edge.target === node.id).length} incoming dependencies may be affected by changes here.`,
-        ]
-      : [];
+  const findings = node?.findings ?? [];
+  const code = node?.codeExcerpt ?? '';
+  const lines = code.split(/\r\n|\r|\n/);
+  const imports = node ? specimen?.edges.filter((edge) => edge.source === node.id) ?? [] : [];
+  const importedBy = node ? specimen?.edges.filter((edge) => edge.target === node.id) ?? [] : [];
 
-  return (
-    <aside
-      aria-label="Specimen detail panel"
-      className="fixed inset-x-0 bottom-0 z-30 flex max-h-[78vh] w-full flex-col overflow-y-auto border-t border-hairline bg-white p-5 shadow-[0_-12px_30px_rgba(17,17,19,0.08)] sm:static sm:max-h-none sm:w-96 sm:shrink-0 sm:border-l sm:border-t-0 sm:p-6 sm:shadow-none"
-    >
-      <div className="flex items-start justify-between border-b border-hairline pb-5">
-        <div className="min-w-0">
-          <p className="truncate font-mono text-xs text-muted">{node?.path ?? 'Select a file node'}</p>
-          <h2 className="mt-0.5 truncate font-display text-lg font-bold">{node?.name ?? 'Specimen detail'}</h2>
-          {node && <p className={`mt-2 font-mono text-sm font-bold ${rotScoreTier(node.rotScore) === 'crimson' ? 'text-crimson' : 'text-ink'}`}>{node.rotScore} / 100</p>}
-        </div>
-        <button type="button" onClick={onClose} className="ml-4 shrink-0 rounded-md px-2 py-1 text-xs font-medium text-muted hover:bg-surface hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent sm:hidden">
-          Close
-        </button>
+  useEffect(() => {
+    if (tab !== 'source' || highlightLine === null || !codeRef.current) return;
+    codeRef.current.querySelector(`[data-line="${highlightLine}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [tab, highlightLine]);
+
+  const copyCode = async () => {
+    if (!code || !navigator.clipboard) return;
+    await navigator.clipboard.writeText(code);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
+  };
+  const jumpToFinding = (finding: string) => {
+    const line = /Line\s+(\d+)/i.exec(finding)?.[1];
+    setHighlightLine(line ? Number(line) : null);
+    setTab('source');
+  };
+
+  return <aside aria-label="Specimen detail panel" className={`${expanded ? 'w-[640px]' : 'w-[420px]'} z-30 flex h-full shrink-0 flex-col border-l border-hairline bg-white transition-all duration-200 max-sm:fixed max-sm:inset-x-0 max-sm:bottom-0 max-sm:h-[78vh] max-sm:w-full max-sm:border-l-0 max-sm:border-t`}>
+    <header className="shrink-0 border-b border-hairline p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0"><div className="mb-2 flex items-center gap-2"><span className="rounded-full bg-surface px-2 py-0.5 font-mono text-[9px] text-muted">AUTOPSY REPORT</span>{node && <span className={`rounded-full px-2 py-0.5 font-mono text-[9px] font-semibold ${node.rotScore >= 75 ? 'bg-crimson/10 text-crimson' : 'bg-surface text-ink'}`}>{node.rotScore >= 75 ? 'HIGH RISK' : 'REVIEW'}</span>}</div><p className="truncate font-mono text-[10px] text-muted" title={node?.path}>{node?.path ?? 'Select a file node'}</p><h2 className="mt-1 truncate font-display text-[15px] font-medium">{node?.name ?? 'Specimen detail'}</h2>{node && <p className="mt-1 font-mono text-[12px] font-semibold">{node.rotScore}<span className="ml-1 text-[10px] font-normal text-muted">/ 100 rot</span></p>}</div>
+        <div className="flex shrink-0 gap-1.5"><button type="button" onClick={() => setExpanded((value) => !value)} aria-label={expanded ? 'Compact sidebar' : 'Expand sidebar'} className="rounded-full border border-hairline px-2.5 py-1 text-[12px] font-normal text-muted hover:bg-surface">{expanded ? 'Compact' : 'Expand'}</button><button type="button" onClick={onClose} aria-label="Close specimen detail" className="rounded-full border border-hairline px-2.5 py-1 text-[12px] font-normal text-muted hover:bg-surface">Close</button></div>
       </div>
-
-      {node ? (
-        <div className="space-y-6 py-5">
-          <section aria-labelledby="structural-diagnosis-title">
-            <h3 id="structural-diagnosis-title" className="font-display text-sm font-bold">Structural diagnosis</h3>
-            <ul className="mt-3 list-disc space-y-2 pl-5 text-xs leading-relaxed text-muted">
-              {diagnosis.map((finding) => <li key={finding}>{finding}</li>)}
-            </ul>
-          </section>
-
-          <section aria-labelledby="module-telemetry-title">
-            <h3 id="module-telemetry-title" className="font-display text-sm font-bold">Module telemetry</h3>
-            <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
-              <div><dt className="font-mono text-muted">LOC</dt><dd className="mt-1 font-mono">{node.linesOfCode}</dd></div>
-              {node.kind === 'preset' ? (
-                <div><dt className="font-mono text-muted">Last modified</dt><dd className="mt-1 font-mono">{node.lastModified}</dd></div>
-              ) : (
-                <>
-                  <div><dt className="font-mono text-muted">Nesting depth</dt><dd className="mt-1 font-mono">{node.nestingDepth}</dd></div>
-                  <div><dt className="font-mono text-muted">Comment ratio</dt><dd className="mt-1 font-mono">{(node.commentRatio * 100).toFixed(1)}%</dd></div>
-                  <div><dt className="font-mono text-muted">Imports</dt><dd className="mt-1 font-mono">{node.importCount}</dd></div>
-                  <div><dt className="font-mono text-muted">Exports</dt><dd className="mt-1 font-mono">{node.exportCount}</dd></div>
-                  <div><dt className="font-mono text-muted">File size</dt><dd className="mt-1 font-mono">{node.fileSize} bytes</dd></div>
-                  <div><dt className="font-mono text-muted">Language</dt><dd className="mt-1 font-mono">{node.language}</dd></div>
-                </>
-              )}
-            </dl>
-          </section>
-
-          <section aria-labelledby="source-excerpt-title">
-            <h3 id="source-excerpt-title" className="font-display text-sm font-bold">Source excerpt{node.kind === 'ingested' && node.isTruncated ? ' (truncated)' : ''}</h3>
-            <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-hairline bg-surface p-3 font-mono text-[11px] leading-relaxed text-ink">{node.kind === 'preset' ? node.codeExcerpt : node.rawContent}</pre>
-          </section>
-        </div>
-      ) : (
-        <p className="py-5 text-xs text-muted">Select a file node to inspect its diagnosis and source.</p>
-      )}
-    </aside>
-  );
+      {node && <div className="mt-4 flex rounded-lg bg-surface p-1" role="tablist"><button type="button" role="tab" aria-selected={tab === 'overview'} onClick={() => setTab('overview')} className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium ${tab === 'overview' ? 'bg-white text-ink shadow-sm' : 'text-muted'}`}>Overview</button><button type="button" role="tab" aria-selected={tab === 'source'} onClick={() => setTab('source')} className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium ${tab === 'source' ? 'bg-white text-ink shadow-sm' : 'text-muted'}`}>Source Code</button></div>}
+    </header>
+    {node ? tab === 'overview' ? <div className="flex-1 overflow-y-auto p-4"><section><div className="flex items-center justify-between"><h3 className="font-display text-[13px] font-medium">Findings</h3><span className="font-mono text-[10px] text-muted">Click to jump to line</span></div><ol className="mt-3 space-y-2">{findings.map((finding, index) => <li key={finding}><button type="button" onClick={() => jumpToFinding(finding)} className="flex w-full gap-2.5 rounded-lg p-2 text-left text-[13px] leading-relaxed text-muted hover:bg-surface"><span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-surface font-mono text-[10px] text-ink">{String(index + 1).padStart(2, '0')}</span><span>{finding}</span></button></li>)}</ol></section><section className="mt-6"><h3 className="font-display text-[13px] font-medium">Module telemetry</h3><dl className="mt-3 grid grid-cols-2 gap-2">{[['LOC', String(node.linesOfCode)], ['Imports', String(imports.length)], ['Imported by', String(importedBy.length)], [node.kind === 'preset' ? 'Last modified' : 'Last commit', node.kind === 'preset' ? node.lastModified : node.lastCommit]].map(([label, value]) => <div key={label} className="rounded-lg bg-surface p-2.5"><dt className="font-mono text-[10px] text-muted">{label}</dt><dd className="mt-1 truncate font-mono text-xs font-medium text-ink">{value}</dd></div>)}</dl></section><section className="mt-6"><h3 className="font-display text-[13px] font-medium">Imports</h3><div className="mt-2 space-y-1">{imports.length ? imports.map((edge) => <button key={edge.id} type="button" onClick={() => onSelectNode(edge.target)} className="block w-full truncate rounded px-2 py-1.5 text-left font-mono text-[10px] text-muted hover:bg-surface hover:text-ink">→ {specimen?.nodes.find((candidate) => candidate.id === edge.target)?.name ?? edge.target}</button>) : <p className="text-xs text-muted">No indexed imports.</p>}</div><h3 className="mt-4 font-display text-[13px] font-medium">Imported by</h3><div className="mt-2 space-y-1">{importedBy.length ? importedBy.map((edge) => <button key={edge.id} type="button" onClick={() => onSelectNode(edge.source)} className="block w-full truncate rounded px-2 py-1.5 text-left font-mono text-[10px] text-muted hover:bg-surface hover:text-ink">← {specimen?.nodes.find((candidate) => candidate.id === edge.source)?.name ?? edge.source}</button>) : <p className="text-xs text-muted">No indexed dependents.</p>}</div></section><button type="button" onClick={onBlastRadius} className="mt-6 w-full rounded-xl bg-ink px-3 py-2.5 text-xs font-medium text-white hover:opacity-90">Analyze downstream blast radius →</button></div> : <div ref={codeRef} className="min-h-0 flex-1 overflow-y-auto p-3"><div className="mb-3 flex items-center justify-between px-2"><span className="font-mono text-[10px] text-muted">{lines.length} lines</span><button type="button" onClick={copyCode} className="rounded-full border border-hairline px-2.5 py-1 text-[10px] text-muted hover:bg-surface">{copied ? 'Copied' : 'Copy code'}</button></div><pre className="font-mono text-[10px] leading-5">{lines.map((line, index) => { const lineNo = index + 1; return <div key={lineNo} data-line={lineNo} className={`flex min-w-max rounded px-2 ${highlightLine === lineNo ? 'bg-amber/20 text-ink' : 'text-ink'}`}><span className="mr-4 w-8 select-none text-right text-muted/60">{lineNo}</span><span>{line || ' '}</span></div>; })}</pre></div> : <p className="p-5 text-xs text-muted">Select a file node to inspect it.</p>}
+  </aside>;
 }
-
 function WorkspaceContent() {
   const searchParams = useSearchParams();
   const queryString = searchParams.toString();
@@ -419,6 +397,10 @@ function WorkspaceContent() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [spotlightNodeIds, setSpotlightNodeIds] = useState<string[]>([]);
   const [isolateHotspots, setIsolateHotspots] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [minRot, setMinRot] = useState(0);
+  const [showComparison, setShowComparison] = useState(false);
+  const [previousAudit, setPreviousAudit] = useState<{ files: number; averageRot: number } | null>(null);
   const [camera, setCamera] = useState({ x: 0, y: 20, scale: 0.92 });
   const [requestState, setRequestState] = useState<
     { status: 'idle' | 'loading' | 'success'; repository?: string; partial?: boolean; showingSample?: boolean; isSlow?: boolean } | IngestErrorState
@@ -437,9 +419,6 @@ function WorkspaceContent() {
     activeControllerRef.current?.abort();
     activeControllerRef.current = controller;
     const normalizedRepository = repo && /^[a-z][a-z\d+.-]*:\/\//i.test(repo) ? repo : repo ? `https://${repo}` : null;
-    const highestRotNode = nextSpecimen?.nodes.reduce((highest, node) => (
-      highest === null || node.rotScore > highest.rotScore ? node : highest
-    ), null as Specimen['nodes'][number] | null);
 
     // URL search parameters are browser state; resolve them after hydration.
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -454,6 +433,23 @@ function WorkspaceContent() {
       return () => controller.abort();
     }
 
+    const showAnalysis = (analysis: RepoAnalysis) => {
+      const analyzed = convertRepoAnalysis(analysis);
+      // Keep the initial audit focused on the graph. Panels open only after a deliberate node click.
+      setSpecimen(analyzed);
+      setSelectedNodeId(null);
+      setRequestState({ status: 'success', repository: analysis.title });
+    };
+
+    // The landing page already analyzed this repository and left the result in sessionStorage.
+    let stored: string | null = null;
+    try { stored = window.sessionStorage.getItem(ACTIVE_REPO_STORAGE_KEY); } catch { /* storage unavailable */ }
+    const cached = readActiveRepo(stored, repo ?? '');
+    if (cached) {
+      showAnalysis(cached);
+      return () => controller.abort();
+    }
+
     setSpecimen(null);
     setRequestState({ status: 'loading', repository: repo ?? normalizedRepository, isSlow: false });
     const slowTimer = window.setTimeout(() => {
@@ -464,37 +460,27 @@ function WorkspaceContent() {
         const response = await fetch('/api/ingest', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ repositoryUrl: normalizedRepository }),
+          body: JSON.stringify({ repoUrl: repo }),
           signal: controller.signal,
         });
-        let payload: ApiResponse<IngestResult>;
+        let payload: unknown;
         try {
-          payload = await response.json() as ApiResponse<IngestResult>;
+          payload = await response.json();
         } catch {
           if (!controller.signal.aborted) setRequestState(createIngestErrorState(undefined, repo ?? undefined));
           return;
         }
-        if (!response.ok || !payload.success || !payload.data) {
-          if (!controller.signal.aborted) setRequestState(createIngestErrorState(payload.error?.code, repo ?? undefined));
+        if (controller.signal.aborted) return;
+        if (!response.ok || !isRepoAnalysis(payload)) {
+          const code = (payload as ApiResponse<null> | null)?.error?.code;
+          setRequestState(createIngestErrorState(response.ok ? undefined : code, repo ?? undefined));
           return;
         }
-        if (controller.signal.aborted) return;
-        const ingestedSpecimen = convertIngestResult(payload.data);
-        const highestNode = ingestedSpecimen.nodes.reduce((highest, node) => (
-          highest === null || node.rotScore > highest.rotScore ? node : highest
-        ), null as Specimen['nodes'][number] | null);
-        setSpecimen(ingestedSpecimen);
-        setSelectedNodeId(null);
-        setRequestState({
-          status: 'success',
-          repository: deriveRepositoryTitle(payload.data.metadata!.repositoryUrl),
-          partial: payload.data.metadata!.treeTruncated || payload.data.metadata!.skippedFiles.length > 0,
-        });
+        showAnalysis(payload);
       } catch {
         if (!controller.signal.aborted) setRequestState({ status: 'error', message: 'The server could not be reached.', repository: repo ?? undefined });
       }
     })();
-
     return () => {
       window.clearTimeout(slowTimer);
       controller.abort();
@@ -525,29 +511,57 @@ function WorkspaceContent() {
   const retryIngest = () => setRetryNonce((value) => value + 1);
 
 
-  useEffect(() => {
-    const validSpotlightNodes = (specimen?.nodes ?? []).filter((node) => spotlightNodeIds.includes(node.id));
-    if (validSpotlightNodes.length === 0) return;
-    const center = validSpotlightNodes.reduce(
-      (sum, node) => ({ x: sum.x + node.position.x + NODE_WIDTH / 2, y: sum.y + node.position.y + NODE_HEIGHT / 2 }),
-      { x: 0, y: 0 },
-    );
-    const frame = requestAnimationFrame(() => {
-      const offset = centerOffset(specimen?.nodes ?? []);
-      setCamera({
-        x: GRAPH_WIDTH / 2 - center.x / validSpotlightNodes.length - offset.x,
-        y: GRAPH_HEIGHT / 2 - center.y / validSpotlightNodes.length - offset.y,
-        scale: 1,
-      });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [specimen, spotlightNodeIds]);
+
 
   useEffect(() => () => window.speechSynthesis.cancel(), []);
 
-  const selectNode = (nodeId: string) => {
+  const selectNode = (nodeId: string | null) => {
+    if (nodeId === null) {
+      setSelectedNodeId(null);
+      return;
+    }
     if ((specimen?.nodes ?? []).some((node) => node.id === nodeId)) setSelectedNodeId(nodeId);
   };
+
+  const visibleNodeIds = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    return new Set((specimen?.nodes ?? []).filter((node) =>
+      (!query || `${node.name} ${node.path}`.toLowerCase().includes(query)) && node.rotScore >= minRot,
+    ).map((node) => node.id));
+  }, [specimen, searchQuery, minRot]);
+
+  const exportReport = (format: 'json' | 'md') => {
+    if (!specimen) return;
+    const report = format === 'json'
+      ? JSON.stringify({ title: specimen.title, summary: specimen.summary, nodes: specimen.nodes, edges: specimen.edges }, null, 2)
+      : `# ${specimen.title}\n\n${specimen.summary}\n\n## Files\n${specimen.nodes.map((node) => `- ${node.path}: ${node.rotScore}/100 rot, ${node.linesOfCode} LOC`).join('\n')}`;
+    const blob = new Blob([report], { type: format === 'json' ? 'application/json' : 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a'); link.href = url; link.download = `${specimen.title.replace(/[^a-z0-9]+/gi, '-')}.${format === 'json' ? 'json' : 'md'}`; link.click(); URL.revokeObjectURL(url);
+  };
+
+  const saveAuditSnapshot = () => {
+    if (!specimen) return;
+    const snapshot = { files: specimen.nodes.length, averageRot: Math.round(specimen.nodes.reduce((sum, node) => sum + node.rotScore, 0) / Math.max(1, specimen.nodes.length)), savedAt: Date.now() };
+    const history = JSON.parse(localStorage.getItem('necro:audit-history') || '[]') as typeof snapshot[];
+    localStorage.setItem('necro:audit-history', JSON.stringify([snapshot, ...history].slice(0, 10)));
+    setPreviousAudit(history[0] ?? null);
+  };
+
+  const loadPreviousAudit = () => {
+    const history = JSON.parse(localStorage.getItem('necro:audit-history') || '[]') as { files: number; averageRot: number }[];
+    setPreviousAudit(history[0] ?? null);
+    setShowComparison(true);
+  };
+  const analyzeBlastRadius = () => {
+    if (!specimen || !selectedNodeId) return;
+    const ids = new Set<string>([selectedNodeId]);
+    let changed = true;
+    while (changed) { changed = false; specimen.edges.forEach((edge) => { if (ids.has(edge.source) && !ids.has(edge.target)) { ids.add(edge.target); changed = true; } }); }
+    setSpotlightNodeIds([...ids]);
+  };
+
+  const animateCamera = (next: { x: number; y: number; scale: number }) => setCamera(next);
 
   const title = specimen?.title ?? source?.repo ?? 'Necro-Docs workspace';
   const summary = specimen?.summary;
@@ -555,32 +569,42 @@ function WorkspaceContent() {
   return (
     <main className="flex h-screen w-screen flex-col overflow-hidden bg-canvas font-sans text-ink">
       <h1 ref={lifecycleHeadingRef} tabIndex={-1} className="sr-only">Necro-Docs workspace</h1>
-      <header className="z-20 flex h-14 shrink-0 items-center justify-between border-b border-hairline bg-white px-5">
+      <header className="z-20 flex h-12 shrink-0 items-center justify-between border-b border-hairline bg-white px-5">
         <div className="flex min-w-0 items-center gap-4">
-          <Link href="/" className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">
+          <Link href="/" className="flex shrink-0 items-center gap-1.5 text-xs font-normal text-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">
             <ChevronLeft size={16} aria-hidden="true" />
             <span>Back</span>
           </Link>
           <span aria-hidden="true" className="h-4 w-px bg-hairline" />
-          <span className="truncate font-mono text-xs font-semibold" title={title}>{title}</span>
+          <span className="truncate font-mono text-[12px] font-medium" title={title}>{title}</span>
         </div>
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-          {summary && <span className="hidden font-mono text-xs text-muted sm:inline">{summary}</span>}
-          {requestState.status === 'success' && requestState.partial && <span className="hidden font-mono text-xs text-muted sm:inline">Partial result</span>}
-          {requestState.status === 'success' && requestState.showingSample && <span className="hidden font-mono text-xs text-muted sm:inline">Showing sample data</span>}
-          <button type="button" aria-pressed={isolateHotspots} onClick={() => setIsolateHotspots((value) => !value)} className={`rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent ${isolateHotspots ? 'border-ink bg-ink text-white' : 'border-hairline text-ink hover:bg-surface'}`}>
+          {summary && <span className="hidden font-mono text-[10px] text-muted sm:inline">{summary}</span>}
+                    {requestState.status === 'success' && requestState.showingSample && <span className="hidden font-mono text-[10px] text-muted sm:inline">Showing sample data</span>}
+          <button type="button" aria-pressed={isolateHotspots} onClick={() => setIsolateHotspots((value) => !value)} className={`rounded-full border px-2.5 py-1 text-[12px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent ${isolateHotspots ? 'border-ink bg-ink text-white' : 'border-hairline text-ink hover:bg-surface'}`}>
             Isolate hotspots
           </button>
-          <button type="button" aria-label="Reset graph view" onClick={() => setCamera({ x: 0, y: 20, scale: 0.92 })} className="flex items-center gap-1.5 rounded-full border border-hairline px-3.5 py-1.5 text-xs font-medium text-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">
+          <button type="button" aria-label="Reset graph view" onClick={() => animateCamera({ x: 0, y: 20, scale: 0.92 })} className="flex items-center gap-1.5 rounded-full border border-hairline px-2 py-0.5 text-[12px] font-normal text-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">
             <RotateCcw size={13} aria-hidden="true" />
             <span>Reset view</span>
           </button>
         </div>
       </header>
 
+      {specimen && <div className="z-10 flex flex-wrap items-center gap-2 border-b border-hairline bg-white px-4 py-1.5">
+        <div className="relative min-w-[200px] flex-1"><Search size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" /><Input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search filesâ€¦" aria-label="Search files" className="h-9 rounded-full pl-8 text-[13px] md:text-[13px]" /></div>
+        <label className="flex items-center gap-2 font-mono text-[10px] text-muted">Min rot <input type="range" min="0" max="100" value={minRot} onChange={(event) => setMinRot(Number(event.target.value))} className="w-20" /><span>{minRot}</span></label>
+        <button type="button" onClick={() => animateCamera({ ...camera, scale: Math.min(1.5, camera.scale + 0.1) })} className="rounded-full border border-hairline p-2" aria-label="Zoom in"><ZoomIn size={14} /></button><button type="button" onClick={() => animateCamera({ ...camera, scale: Math.max(0.35, camera.scale - 0.1) })} className="rounded-full border border-hairline p-2" aria-label="Zoom out"><ZoomOut size={14} /></button>
+        <button type="button" onClick={() => animateCamera({ x: 0, y: 20, scale: 0.92 })} className="rounded-full border border-hairline p-2" aria-label="Fit graph"><Maximize2 size={14} /></button>
+        <button type="button" onClick={() => exportReport('md')} className="flex items-center gap-1 rounded-full border border-hairline px-2 py-0.5 text-[12px] font-normal"><Download size={13} />Export MD</button><button type="button" onClick={() => exportReport('json')} className="rounded-full border border-hairline px-2 py-0.5 text-[12px] font-normal">JSON</button>
+        <button type="button" onClick={saveAuditSnapshot} className="rounded-full border border-hairline px-2 py-0.5 text-[12px] font-normal">Save snapshot</button>
+        <button type="button" onClick={loadPreviousAudit} className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[12px] font-normal ${showComparison ? 'border-ink bg-ink text-white' : 'border-hairline'}`}><GitCompare size={13} />Compare</button>
+      </div>}
+      {showComparison && specimen && <div className="z-10 border-b border-hairline bg-surface px-5 py-2 text-xs text-muted">Current audit: <strong className="text-ink">{specimen.nodes.length} files, {Math.round(specimen.nodes.reduce((sum, node) => sum + node.rotScore, 0) / Math.max(1, specimen.nodes.length))} average rot</strong>{previousAudit ? <> Â· Previous: <strong className="text-ink">{previousAudit.files} files, {previousAudit.averageRot} average rot</strong></> : ' Â· Save a snapshot to compare future audits.'}</div>}
+
       {requestState.status === 'loading' && (
         <div role="status" aria-live="polite" className="border-b border-hairline bg-surface px-5 py-3 font-mono text-xs">
-          <div>Analyzing repository… {requestState.repository}</div>
+          <div>Analyzing repositoryâ€¦ {requestState.repository}</div>
           <button type="button" onClick={cancelIngest} className="mt-2 rounded-full border border-ink px-3 py-1.5 font-sans text-xs text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">Cancel</button>
           {requestState.isSlow && <><p className="mt-3">This is taking longer than usual.</p><PresetChoices onChoose={choosePreset} /></>}
         </div>
@@ -596,20 +620,23 @@ function WorkspaceContent() {
 
       {source?.repo || specimen ? (
         <div className="relative flex min-h-0 flex-1 overflow-hidden">
-          <GraphViewport
-            specimen={specimen}
-            selectedNodeId={selectedNodeId}
-            spotlightNodeIds={spotlightNodeIds}
-            camera={camera}
-            onCameraChange={setCamera}
-            onSelectNode={selectNode}
-            isolateHotspots={isolateHotspots}
-          />
-          {selectedNodeId && <SeanceConsole specimen={specimen} selectedNodeId={selectedNodeId} onSpotlight={({ nodeIds, selectedNodeId: responseSelection }) => {
-            setSpotlightNodeIds(nodeIds);
-            if (responseSelection) setSelectedNodeId(responseSelection);
-          }} />}
-          {selectedNodeId && <DetailPanel specimen={specimen} selectedNodeId={selectedNodeId} onClose={() => setSelectedNodeId(null)} />}
+          <div className="relative flex min-w-0 flex-1 flex-col">
+            <GraphViewport
+              specimen={specimen}
+              selectedNodeId={selectedNodeId}
+              spotlightNodeIds={spotlightNodeIds}
+              camera={camera}
+              visibleNodeIds={visibleNodeIds}
+              onCameraChange={setCamera}
+              onSelectNode={selectNode}
+              isolateHotspots={isolateHotspots}
+            />
+            {selectedNodeId && <SeanceConsole specimen={specimen} selectedNodeId={selectedNodeId} onSpotlight={({ nodeIds, selectedNodeId: responseSelection }) => {
+              setSpotlightNodeIds(nodeIds);
+              if (responseSelection) setSelectedNodeId(responseSelection);
+            }} />}
+          </div>
+          {selectedNodeId && <DetailPanel specimen={specimen} selectedNodeId={selectedNodeId} onBlastRadius={analyzeBlastRadius} onSelectNode={selectNode} onClose={() => setSelectedNodeId(null)} />}
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto"><PresetChoices /></div>
@@ -620,8 +647,10 @@ function WorkspaceContent() {
 
 export default function WorkspacePage() {
   return (
-    <Suspense fallback={<main className="flex h-screen w-screen items-center justify-center bg-canvas font-mono text-xs text-muted">Loading workspace…</main>}>
+    <Suspense fallback={<main className="flex h-screen w-screen items-center justify-center bg-canvas font-mono text-xs text-muted">Loading workspaceâ€¦</main>}>
       <WorkspaceContent />
     </Suspense>
   );
 }
+
+

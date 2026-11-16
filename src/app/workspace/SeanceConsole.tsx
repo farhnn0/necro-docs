@@ -1,8 +1,8 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Mic } from 'lucide-react';
+import { ChevronDown, Mic } from 'lucide-react';
 import { buildSeanceRequest, filterSpotlight, quickQuestions } from '@/lib/conversion/helpers';
 import { PRESET_FALLBACK_ANSWERS } from '@/lib/conversion/specimens';
 import type { SeanceResponse, Specimen, SpotlightState } from '@/lib/conversion/types';
@@ -49,6 +49,7 @@ export default function SeanceConsole({ specimen, selectedNodeId, onSpotlight }:
   const [isListening, setIsListening] = useState(false);
   const [speechRecognition, setSpeechRecognition] = useState<SpeechRecognitionConstructor | null>(null);
   const [speechStatus, setSpeechStatus] = useState('');
+  const [chatOpen, setChatOpen] = useState(false);
 
   const stopSpeaking = () => {
     if (speechTimerRef.current !== null) window.clearTimeout(speechTimerRef.current);
@@ -124,7 +125,7 @@ export default function SeanceConsole({ specimen, selectedNodeId, onSpotlight }:
     recognition.onend = () => { recognitionRef.current = null; setIsListening(false); };
     recognitionRef.current = recognition;
     setIsListening(true);
-    setSpeechStatus('Listening…');
+    setSpeechStatus('Listeningâ€¦');
     try { recognition.start(); } catch { stopRecognition(); setSpeechStatus('Speech recognition failed. You can still type a question.'); }
   };
 
@@ -141,7 +142,10 @@ export default function SeanceConsole({ specimen, selectedNodeId, onSpotlight }:
 
   const fallback = (question: string) => {
     if (!specimen) return 'Choose a specimen before asking a question.';
-    if (specimen.kind === 'ingested') return 'The voice answer is unavailable. Spotlight and selection were preserved.';
+    if (specimen.kind === 'ingested') {
+      const node = specimen.nodes.find((candidate) => candidate.id === selectedNodeId) ?? specimen.nodes[0];
+      return node ? `${node.name} has a rot score of ${node.rotScore}. ${node.findings[0] ?? 'Review its connected dependencies before changing it.'}` : 'No file is selected yet.';
+    }
     const answers = PRESET_FALLBACK_ANSWERS[specimen.id];
     const exact = answers.find((item) => item.question === question);
     if (exact) return exact.answer;
@@ -153,13 +157,14 @@ export default function SeanceConsole({ specimen, selectedNodeId, onSpotlight }:
     if (!specimen) return;
     const question = rawQuestion.trim().slice(0, 500);
     if (!question) return;
+    setChatOpen(true);
     stopSpeaking();
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
     const timeout = window.setTimeout(() => controller.abort(), 15000);
-    setTranscript(`${question}\n\nThinking…`);
+    setTranscript(`${question}\n\nThinkingâ€¦`);
     setThinking(true);
     try {
       const response = await fetch('/api/seance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildSeanceRequest(question, selectedNodeId, specimen)), signal: controller.signal });
@@ -180,16 +185,17 @@ export default function SeanceConsole({ specimen, selectedNodeId, onSpotlight }:
     }
   };
 
-  return <section aria-labelledby="seance-title" className="absolute bottom-6 left-1/2 z-10 w-[92%] max-w-xl -translate-x-1/2">
-    <div className="acctual-window rounded-3xl bg-white/95 p-4 backdrop-blur-md">
+  return <section aria-labelledby="seance-title" className={`absolute bottom-4 left-1/2 z-10 w-[min(580px,calc(100%-24px))] -translate-x-1/2 ${chatOpen ? 'max-h-[min(520px,calc(100%-24px))]' : ''}`}>
+    <div className="acctual-window rounded-2xl border border-hairline bg-white/95 shadow-[0_12px_30px_rgba(17,17,19,0.10)] backdrop-blur-md">
       <h2 id="seance-title" className="sr-only">Seance console</h2>
-      <p aria-live="polite" className="whitespace-pre-line px-1 text-xs leading-relaxed text-ink">{transcript}</p>
-      {speechStatus && <p role="status" className="mt-1 px-1 font-mono text-[10px] text-muted">{speechStatus}</p>}
-      <div className="mt-3 flex flex-wrap gap-2" aria-label="Quick questions">{(specimen ? quickQuestions(specimen) : []).map(({ question }) => <button key={question} type="button" onClick={() => { if (inputRef.current) inputRef.current.value = question; void submit(question); }} className="rounded-full border border-hairline bg-surface px-3 py-1.5 text-left text-[11px] font-medium text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">{question}</button>)}</div>
-      <form onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void submit(inputRef.current?.value ?? ''); }} className="mt-3 flex items-center gap-3 border-t border-hairline pt-3">
-        <label htmlFor="seance-question" className="sr-only">Ask a question</label><input ref={inputRef} id="seance-question" name="seance-question" type="text" className="min-w-0 flex-1 bg-transparent px-1 py-2 text-xs text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent" placeholder="Ask the code archaeologist…" />
-        <button type="submit" className="rounded-full bg-ink px-3 py-2 text-xs font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">Send</button><button type="button" onClick={toggleRecognition} disabled={!speechRecognition && !isListening} aria-label={isListening ? 'Listening…' : 'Ask by voice'} aria-pressed={isListening} title={speechRecognition ? (isListening ? 'Stop listening' : 'Ask by voice') : 'Voice input is not supported in this browser'} className="rounded-full bg-ink p-2 text-white disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent"><Mic size={14} aria-hidden="true" /></button><div className={`flex items-center gap-1 px-1 ${isSpeaking ? 'is-speaking' : ''}`} aria-label="Speech waveform" aria-hidden="true">{[2, 3.5, 5, 3, 4, 2.5, 4].map((height, index) => <span key={index} className="wave-bar w-0.5 bg-ink" style={{ height: `${height * 4}px` }} />)}</div>
+      {chatOpen && <div className="flex items-center justify-between border-b border-hairline px-4 py-2"><span className="font-mono text-[10px] text-muted">CODE ARCHAEOLOGIST</span><button type="button" onClick={() => setChatOpen(false)} aria-label="Collapse chat" className="rounded-full p-1 text-muted hover:bg-surface hover:text-ink"><ChevronDown size={15} /></button></div>}
+      {chatOpen && <div className="max-h-52 overflow-y-auto px-4 pt-3"><p aria-live="polite" className="whitespace-pre-line text-[13px] leading-relaxed text-ink">{transcript}</p>{speechStatus && <p role="status" className="mt-1 font-mono text-[10px] text-muted">{speechStatus}</p>}</div>}
+      {chatOpen && <div className="flex flex-wrap gap-1.5 px-4 pt-3" aria-label="Quick questions">{(specimen ? quickQuestions(specimen) : []).map(({ question }) => <button key={question} type="button" onClick={() => { if (inputRef.current) inputRef.current.value = question; void submit(question); }} className="rounded-full border border-hairline bg-surface px-2.5 py-1 text-[10px] font-medium text-ink hover:bg-hairline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">{question}</button>)}</div>}
+      <form onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void submit(inputRef.current?.value ?? ''); }} onFocus={() => setChatOpen(true)} className={`flex h-16 items-center gap-2 px-3 ${chatOpen ? 'border-t border-hairline' : ''}`}>
+        <label htmlFor="seance-question" className="sr-only">Ask a question</label><input ref={inputRef} id="seance-question" name="seance-question" type="text" className="min-w-0 flex-1 bg-transparent px-2 text-sm text-ink outline-none placeholder:text-muted focus-visible:ring-2 focus-visible:ring-skyAccent" placeholder="Ask the code archaeologist…" />
+        <button type="submit" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-ink text-[11px] font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent" aria-label="Send question">↵</button><button type="button" onClick={toggleRecognition} disabled={!speechRecognition && !isListening} aria-label={isListening ? 'Listening…' : 'Ask by voice'} aria-pressed={isListening} title={speechRecognition ? (isListening ? 'Stop listening' : 'Ask by voice') : 'Voice input is not supported in this browser'} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-hairline text-ink disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent"><Mic size={15} aria-hidden="true" /></button><div className={`flex items-center gap-1 px-1 ${isSpeaking ? 'is-speaking' : ''}`} aria-label="Speech waveform" aria-hidden="true">{[2, 3.5, 5, 3, 4, 2.5, 4].map((height, index) => <span key={index} className="wave-bar w-0.5 bg-ink" style={{ height: `${height * 3}px` }} />)}</div>
       </form>
     </div>
   </section>;
 }
+

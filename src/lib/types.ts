@@ -244,54 +244,67 @@ export type EdgeType = 'import' | 'export' | 'dependency' | 'calls' | 'inherits'
 // Ingest Types
 // ============================================================================
 
-export interface SelectionCriteria {
-  includePatterns?: string[];
-  excludePatterns?: (string | RegExp)[];
-  extensions?: string[];
-  sortBy?: 'size-asc' | 'size-desc' | 'path-asc' | 'path-desc';
-  limit?: number;
-  eligibleCount?: number;
-  selectedCount?: number;
+export type IngestLanguage = 'TypeScript' | 'JavaScript' | 'Python';
+export type IngestEdgeType = 'import' | 'require' | 'export';
+
+export interface IngestRequestBody {
+  repositoryUrl?: string;
+  useDemo?: boolean;
+  demoId?: string | null;
 }
 
 export interface IngestNode {
-  id: string;
+  id: string; // repository path
   path: string;
-  name?: string;
-  language?: IngestLanguage;
-  content?: string;
-  rawContent?: string;
-  size?: number;
-  metadata?: Record<string, any>;
-  rotScore?: number;
-  linesOfCode?: number;
-  summaryMetrics?: Record<string, any>;
-  isTruncated?: boolean;
-  importCount?: number;
-  exportCount?: number;
-  analyzedAt?: string;
+  name: string; // basename
+  language: IngestLanguage;
+  rotScore: number; // integer 0..100
+  linesOfCode: number; // >= 0
+  summaryMetrics: {
+    nestingDepth: number;
+    commentRatio: number; // 0..100, 2 dp
+    fileSize: number; // bytes, from tree
+  };
+  rawContent: string; // first 4000 chars
+  isTruncated: boolean;
+  importCount: number;
+  exportCount: number;
+  analyzedAt: string; // ISO 8601
 }
 
-export type IngestEdgeType = 'import' | 'require' | 'export';
-
 export interface IngestEdge {
-  id?: string;
+  id: string; // `${source}→${target}`
   source: string;
   target: string;
   type: IngestEdgeType;
-  label?: string;
-  metadata?: Record<string, any>;
+  label: string; // specifier as written in the first occurrence
+  metadata: { importCount: number }; // >= 1
 }
 
-export type IngestLanguage = 'TypeScript' | 'JavaScript' | 'Python';
+export interface SelectionCriteria {
+  extensions: string[];
+  excludePatterns: string[];
+  sortBy: 'size-asc';
+  limit: number;
+  eligibleCount: number;
+  selectedCount: number;
+}
+
+export interface IngestMetadata {
+  repositoryUrl: string; // canonical https://github.com/{owner}/{repo}
+  defaultBranch: string;
+  analyzedAt: string; // ISO 8601
+  fileCount: number; // === nodes.length
+  averageRotScore: number; // mean of node rotScore, 2 dp
+  processingDurationMs: number;
+  treeTruncated: boolean;
+  skippedFiles: string[]; // selected files that returned 404
+  selection: SelectionCriteria;
+  rateLimit: { remaining: number; resetAt: string | null } | null;
+}
 
 export interface IngestResult {
   nodes: IngestNode[];
   edges: IngestEdge[];
-  stats?: {
-    totalFiles: number;
-    totalLines: number;
-    languages: Record<string, number>;
-  };
-  metadata?: Record<string, any>;
+  metadata: IngestMetadata;
 }
