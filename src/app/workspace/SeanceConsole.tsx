@@ -1,9 +1,16 @@
-﻿'use client';
+'use client';
 
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { ChevronDown, Mic } from 'lucide-react';
-import { buildSeanceRequest, filterSpotlight, quickQuestions } from '@/lib/conversion/helpers';
+import { ChevronDown, CornerDownLeft, Mic, Sparkles } from 'lucide-react';
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from '@/components/ui/input-group';
+import { buildSeanceRequest, filterSpotlight } from '@/lib/conversion/helpers';
+import { detectSpeechLang, prepareSpeech } from '@/lib/speech';
 import { PRESET_FALLBACK_ANSWERS } from '@/lib/conversion/specimens';
 import type { SeanceResponse, Specimen, SpotlightState } from '@/lib/conversion/types';
 
@@ -81,7 +88,11 @@ export default function SeanceConsole({ specimen, selectedNodeId, onSpotlight }:
     }
 
     window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(reply);
+    const lang = detectSpeechLang(reply);
+    const utterance = new SpeechSynthesisUtterance(prepareSpeech(reply, lang).plain);
+    utterance.lang = lang === 'id' ? 'id-ID' : 'en-US';
+    const voice = window.speechSynthesis.getVoices().filter((v) => v.lang.startsWith(lang)).find((v) => /natural|neural|online|google/i.test(v.name));
+    if (voice) utterance.voice = voice;
     utterance.rate = 1.02;
     utterance.onstart = () => {
       speechStartedRef.current = true;
@@ -149,7 +160,7 @@ export default function SeanceConsole({ specimen, selectedNodeId, onSpotlight }:
     };
     recognitionRef.current = recognition;
     setIsListening(true);
-    setSpeechStatus('Listeningâ€¦');
+    setSpeechStatus('Listening…');
     try { recognition.start(); } catch { stopRecognition(); setSpeechStatus('Speech recognition failed. You can still type a question.'); }
   };
 
@@ -188,7 +199,7 @@ export default function SeanceConsole({ specimen, selectedNodeId, onSpotlight }:
     const controller = new AbortController();
     controllerRef.current = controller;
     const timeout = window.setTimeout(() => controller.abort(), 15000);
-    setTranscript(`${question}\n\nThinkingâ€¦`);
+    setTranscript(`${question}\n\nThinking…`);
     setThinking(true);
     try {
       const response = await fetch('/api/seance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildSeanceRequest(question, selectedNodeId, specimen)), signal: controller.signal });
@@ -210,14 +221,76 @@ export default function SeanceConsole({ specimen, selectedNodeId, onSpotlight }:
   };
 
   return <section aria-labelledby="seance-title" className={`absolute bottom-4 left-1/2 z-10 w-[min(580px,calc(100%-24px))] -translate-x-1/2 ${chatOpen ? 'max-h-[min(520px,calc(100%-24px))]' : ''}`}>
-    <div className="acctual-window rounded-2xl border border-hairline bg-white/95 shadow-[0_12px_30px_rgba(17,17,19,0.10)] backdrop-blur-md">
+    <div className="acctual-window rounded-2xl border border-hairline bg-white/95 shadow-[0_12px_30px_rgba(17,17,19,0.08)] backdrop-blur-md">
       <h2 id="seance-title" className="sr-only">Seance console</h2>
-      {chatOpen && <div className="flex items-center justify-between border-b border-hairline px-4 py-2"><span className="font-mono text-[10px] text-muted">CODE ARCHAEOLOGIST</span><button type="button" onClick={() => setChatOpen(false)} aria-label="Collapse chat" className="rounded-full p-1 text-muted hover:bg-surface hover:text-ink"><ChevronDown size={15} /></button></div>}
-      {chatOpen && <div className="max-h-52 overflow-y-auto px-4 pt-3"><p aria-live="polite" className="whitespace-pre-line text-[13px] leading-relaxed text-ink">{transcript}</p>{speechStatus && <p role="status" className="mt-1 font-mono text-[10px] text-muted">{speechStatus}</p>}</div>}
-      {chatOpen && <div className="flex flex-wrap gap-1.5 px-4 pt-3" aria-label="Quick questions">{(specimen ? quickQuestions(specimen) : []).map(({ question }) => <button key={question} type="button" onClick={() => { if (inputRef.current) inputRef.current.value = question; void submit(question); }} className="rounded-full border border-hairline bg-surface px-2.5 py-1 text-[10px] font-medium text-ink hover:bg-hairline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">{question}</button>)}</div>}
-      <form onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void submit(inputRef.current?.value ?? ''); }} onFocus={() => setChatOpen(true)} className={`flex h-16 items-center gap-2 px-3 ${chatOpen ? 'border-t border-hairline' : ''}`}>
-        <label htmlFor="seance-question" className="sr-only">Ask a question</label><input ref={inputRef} id="seance-question" name="seance-question" type="text" className="min-w-0 flex-1 bg-transparent px-2 text-sm text-ink outline-none placeholder:text-muted focus-visible:ring-2 focus-visible:ring-skyAccent" placeholder="Ask the code archaeologist…" />
-        <button type="submit" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-ink text-[11px] font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent" aria-label="Send question">↵</button><button type="button" onClick={toggleRecognition} disabled={!speechRecognition && !isListening} aria-label={isListening ? 'Listening…' : 'Ask by voice'} aria-pressed={isListening} title={speechRecognition ? (isListening ? 'Stop listening' : 'Ask by voice') : 'Voice input is not supported in this browser'} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-hairline text-ink disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent"><Mic size={15} aria-hidden="true" /></button><button type="button" onClick={stopSpeaking} disabled={!isSpeaking} aria-label="Mute and stop voice" className="flex h-9 shrink-0 items-center justify-center rounded-xl border border-hairline px-2 text-[10px] text-muted disabled:opacity-40">{isSpeaking ? 'Mute' : 'Voice'}</button><div className={`flex items-center gap-1 px-1 ${isSpeaking ? 'is-speaking' : ''}`} aria-label="Speech waveform" aria-hidden="true">{[2, 3.5, 5, 3, 4, 2.5, 4].map((height, index) => <span key={index} className="wave-bar w-0.5 bg-ink" style={{ height: `${height * 3}px` }} />)}</div>
+      {chatOpen && <div className="flex items-center justify-between border-b border-hairline px-4 py-2.5"><span className="font-mono text-[10px] font-medium tracking-wider text-muted">CODE ARCHAEOLOGIST</span><button type="button" onClick={() => setChatOpen(false)} aria-label="Collapse chat" className="rounded-full p-1 text-muted transition-colors hover:bg-surface hover:text-ink focus-visible:outline-none"><ChevronDown size={14} /></button></div>}
+      {chatOpen && <div className="max-h-56 overflow-y-auto px-4 py-3"><p aria-live="polite" className="whitespace-pre-line text-[13px] leading-relaxed text-ink">{transcript}</p>{speechStatus && <p role="status" className="mt-1.5 font-mono text-[10px] text-muted">{speechStatus}</p>}</div>}
+      <form onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void submit(inputRef.current?.value ?? ''); }} onFocus={() => setChatOpen(true)} className={`p-2 ${chatOpen ? 'border-t border-hairline' : ''}`}>
+        <label htmlFor="seance-question" className="sr-only">Ask a question</label>
+        <InputGroup className="h-auto w-full items-center rounded-xl border border-hairline bg-surface/50 p-1 shadow-none transition-colors hover:border-muted/30 focus-within:border-ink/20 focus-within:bg-white focus-within:shadow-xs">
+          <InputGroupAddon align="inline-start" className="pl-2.5 pr-1 text-muted">
+            <Sparkles size={15} className="text-muted/60" aria-hidden="true" />
+          </InputGroupAddon>
+          <input
+            ref={inputRef}
+            id="seance-question"
+            name="seance-question"
+            type="text"
+            style={{ outline: 'none', boxShadow: 'none' }}
+            className="h-9 min-w-0 flex-1 border-none bg-transparent px-2 text-[13px] text-ink placeholder:text-muted/50 outline-none focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0"
+            placeholder="Ask the code archaeologist…"
+          />
+          <InputGroupAddon align="inline-end" className="flex items-center gap-1.5 pr-1 pl-1">
+            <button
+              type="submit"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-ink text-white shadow-xs transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink"
+              aria-label="Send question"
+            >
+              <CornerDownLeft size={13} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={toggleRecognition}
+              disabled={!speechRecognition && !isListening}
+              aria-label={isListening ? 'Listening…' : 'Ask by voice'}
+              aria-pressed={isListening}
+              title={speechRecognition ? (isListening ? 'Stop listening' : 'Ask by voice') : 'Voice input is not supported in this browser'}
+              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-all focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink disabled:cursor-not-allowed disabled:opacity-40 ${
+                isListening
+                  ? 'border-ink bg-ink text-white'
+                  : 'border-hairline bg-white text-muted hover:text-ink hover:bg-surface'
+              }`}
+            >
+              <Mic size={14} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={stopSpeaking}
+              disabled={!isSpeaking}
+              aria-label="Mute and stop voice"
+              className={`flex h-8 shrink-0 items-center justify-center rounded-lg border px-2.5 text-[10px] font-mono transition-all disabled:opacity-30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink ${
+                isSpeaking
+                  ? 'border-ink bg-ink text-white font-medium'
+                  : 'border-hairline bg-white text-muted hover:text-ink hover:bg-surface'
+              }`}
+            >
+              {isSpeaking ? 'Mute' : 'Voice'}
+            </button>
+            <div
+              className={`flex shrink-0 items-center gap-1 px-1.5 ${isSpeaking ? 'is-speaking' : ''}`}
+              aria-label="Speech waveform"
+              aria-hidden="true"
+            >
+              {[2, 3.5, 5, 3, 4, 2.5, 4].map((height, index) => (
+                <span
+                  key={index}
+                  className="wave-bar w-0.5 rounded-full bg-ink/70"
+                  style={{ height: `${height * 3}px` }}
+                />
+              ))}
+            </div>
+          </InputGroupAddon>
+        </InputGroup>
       </form>
     </div>
   </section>;

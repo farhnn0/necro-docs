@@ -116,6 +116,7 @@ export interface SeanceResponseData {
   selectNodeId?: string;
   riskLevel?: 'low' | 'medium' | 'high';
   audioBase64?: string | null;
+  speechText?: string;
 }
 
 export type SeanceResponse = ApiResponse<SeanceResponseData>;

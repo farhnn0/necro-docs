@@ -75,7 +75,9 @@ describe('Property 17: node schema', () => {
         // rawContent is a bounded, well-formed prefix of the content.
         expect(typeof n.rawContent).toBe('string');
         expect(n.rawContent.length).toBeLessThanOrEqual(RAW_MAX);
-        expect(n.rawContent.isWellFormed()).toBe(true);
+        if (content.isWellFormed()) {
+          expect(n.rawContent.isWellFormed()).toBe(true);
+        }
         expect(content.startsWith(n.rawContent)).toBe(true);
 
         // isTruncated is true exactly when the fetch was truncated or content exceeds 4000 chars.

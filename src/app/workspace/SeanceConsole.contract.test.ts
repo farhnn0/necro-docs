@@ -16,6 +16,7 @@ describe('Seance console/API contract', () => {
       selectedNodeId: 'charge',
       specimenId: 'payment',
       repositoryUrl: null,
+      repoTitle: specimen.title,
       nodes: specimen.nodes.map(({ id, path, rotScore }) => ({ id, path, rotScore })),
       edges: specimen.edges.map(({ source, target }) => ({ source, target })),
     });
