@@ -224,7 +224,8 @@ select {
   }
 
   .wave-bar,
-  .is-speaking .wave-bar {
+  .is-speaking .wave-bar,
+  .blast-ripple-edge {
     animation: none;
     transform: scaleY(0.65);
     transition: none;

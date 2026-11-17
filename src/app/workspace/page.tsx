@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -6,7 +6,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { CodeBlock } from '@/components/ui/code-block';
 import { Input } from '@/components/ui/input';
-import { ChevronLeft, Download, GitCompare, GripVertical, Maximize2, Mic, RotateCcw, Search, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronLeft, Download, FileText, GitCompare, GripVertical, Maximize2, Mic, RotateCcw, Search, Volume2, ZoomIn, ZoomOut } from 'lucide-react';
 import {
   DndContext,
   useDraggable,
@@ -36,6 +36,7 @@ import type { IngestedWorkspaceNode, IngestErrorState, PresetId, Specimen, Works
 import type { RepoAnalysis } from '@/lib/repoAnalyzer';
 import type { ApiResponse } from '@/lib/types';
 import SeanceConsole from './SeanceConsole';
+import { SurgicalPatch } from './SurgicalPatch';
 
 const initialTranscript =
   'Select any file node or ask a question aloud to trace downstream dependencies.';
@@ -123,6 +124,7 @@ function DraggableGraphNode({
   isSpotlight,
   dimmed,
   meta,
+  impactTag,
   onSelectNode,
 }: {
   node: WorkspaceNode;
@@ -131,6 +133,7 @@ function DraggableGraphNode({
   isSpotlight: boolean;
   dimmed: boolean;
   meta: RotScoreMeta;
+  impactTag?: 'Direct impact' | 'Downstream sink';
   onSelectNode: (nodeId: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -168,6 +171,7 @@ function DraggableGraphNode({
         touchAction: 'none',
       }}
     >
+      {impactTag && <span className="absolute -top-2 left-3 rounded-full bg-skyAccent px-2 py-0.5 font-mono text-[9px] font-medium text-white shadow-sm">{impactTag}</span>}
       <div className="flex items-start justify-between gap-3 font-mono text-[10px]">
         <div className="flex items-center gap-1.5 text-muted">
           <GripVertical size={13} className="shrink-0 text-muted/50" aria-hidden="true" />
@@ -367,6 +371,8 @@ function GraphViewport({
               const selected = node.id === selectedNodeId;
               const isSpotlight = spotlight.has(node.id);
               const dimmed = (visibleNodeIds && !visibleNodeIds.has(node.id)) || (isolateHotspots && node.rotScore < 70 && !selected && !isSpotlight);
+              const directImpact = selectedNodeId !== null && validEdges.some((edge) => edge.source === selectedNodeId && edge.target === node.id);
+              const impactTag = directImpact ? 'Direct impact' : isSpotlight && !selected ? 'Downstream sink' : undefined;
               const meta = rotScoreMeta(node.rotScore);
               const pos = getNodePos(node);
               return (
@@ -378,6 +384,7 @@ function GraphViewport({
                   isSpotlight={isSpotlight}
                   dimmed={dimmed}
                   meta={meta}
+                  impactTag={impactTag}
                   onSelectNode={onSelectNode}
                 />
               );
@@ -518,14 +525,12 @@ function DetailPanel({ specimen, selectedNodeId, onClose, onBlastRadius, onSelec
 
   const jumpToFinding = (finding: string) => {
     const match = /Lines?\s+(\d+)(?:\s*(?:[-–]|to)\s*(\d+))?/i.exec(finding);
-    if (match) {
-      const start = Number(match[1]);
-      setHighlightRange({ start, end: Number(match[2] ?? match[1]) });
-    } else {
-      setHighlightRange(null);
-    }
+    if (match) setHighlightRange({ start: Number(match[1]), end: Number(match[2] ?? match[1]) });
+    else setHighlightRange(null);
     setTab('source');
   };
+
+
 
   return <aside aria-label="Specimen detail panel" className={`${expanded ? 'w-[640px]' : 'w-[420px]'} z-30 flex h-full shrink-0 flex-col border-l border-hairline bg-white transition-all duration-200 max-sm:fixed max-sm:inset-x-0 max-sm:bottom-0 max-sm:h-[78vh] max-sm:w-full max-sm:border-l-0 max-sm:border-t`}>
     <header className="shrink-0 border-b border-hairline p-4">
@@ -559,7 +564,7 @@ function DetailPanel({ specimen, selectedNodeId, onClose, onBlastRadius, onSelec
       const isPositive = /no high-severity|healthy|clean|positive/i.test(finding);
       const badgeClass = isPositive ? 'bg-emerald text-white' : isCritical ? 'bg-crimson/15 text-crimson font-bold' : isLine ? 'bg-amber/20 text-amber font-semibold' : 'bg-surface text-ink';
       return <li key={finding}><button type="button" onClick={() => jumpToFinding(finding)} className="flex w-full gap-2.5 rounded-lg p-2 text-left text-[13px] leading-relaxed text-muted hover:bg-surface transition-colors"><span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full font-mono text-[10px] ${badgeClass}`}>{String(index + 1).padStart(2, '0')}</span><span className="text-ink">{finding}</span></button></li>;
-    })}</ol></section><section className="mt-6"><h3 className="font-display text-[13px] font-medium">Module telemetry</h3><dl className="mt-3 grid grid-cols-2 gap-2">{[['Lines', String(node.linesOfCode)], ['Imports', String(imports.length)], ['Imported by', String(importedBy.length)], [node.kind === 'preset' ? 'Last modified' : 'Last commit', node.kind === 'preset' ? node.lastModified : node.lastCommit]].map(([label, value]) => <div key={label} className="rounded-lg bg-surface p-2.5"><dt className="font-mono text-[10px] text-muted">{label}</dt><dd className="mt-1 truncate font-mono text-xs font-medium text-ink">{value}</dd></div>)}</dl></section><section className="mt-4 rounded-lg border border-hairline bg-surface p-3"><h3 className="font-display text-[13px] font-medium">Recommended action</h3><p className="mt-1.5 text-[13px] leading-[1.45] text-muted">{node.kind === 'ingested' ? node.recommendation : 'Review the findings and validate the change with a focused regression test.'}</p></section><section className="mt-6"><h3 className="font-display text-[13px] font-medium">Imports</h3><div className="mt-2 space-y-1">{imports.length ? imports.map((edge) => <button key={edge.id} type="button" onClick={() => onSelectNode(edge.target)} className="block w-full truncate rounded px-2 py-1.5 text-left font-mono text-[10px] text-muted hover:bg-surface hover:text-ink">→ {specimen?.nodes.find((candidate) => candidate.id === edge.target)?.name ?? edge.target}</button>) : <p className="text-xs text-muted">No indexed imports.</p>}</div><h3 className="mt-4 font-display text-[13px] font-medium">Imported by</h3><div className="mt-2 space-y-1">{importedBy.length ? importedBy.map((edge) => <button key={edge.id} type="button" onClick={() => onSelectNode(edge.source)} className="block w-full truncate rounded px-2 py-1.5 text-left font-mono text-[10px] text-muted hover:bg-surface hover:text-ink">← {specimen?.nodes.find((candidate) => candidate.id === edge.source)?.name ?? edge.source}</button>) : <p className="text-xs text-muted">No indexed dependents.</p>}</div></section><button type="button" onClick={onBlastRadius} className="mt-6 w-full rounded-xl bg-ink px-3 py-2.5 text-xs font-medium text-white hover:opacity-90">Analyze downstream blast radius →</button></div> : <div ref={codeRef} className="min-h-0 flex-1 p-3"><CodeBlock code={code} title={node.path} highlightRange={highlightRange} className="h-full" /></div> : <p className="p-5 text-xs text-muted">Select a file node to inspect it.</p>}
+    })}</ol></section><section className="mt-6"><h3 className="font-display text-[13px] font-medium">Module telemetry</h3><dl className="mt-3 grid grid-cols-2 gap-2">{[['Lines', String(node.linesOfCode)], ['Imports', String(imports.length)], ['Imported by', String(importedBy.length)], [node.kind === 'preset' ? 'Last modified' : 'Last commit', node.kind === 'preset' ? node.lastModified : node.lastCommit]].map(([label, value]) => <div key={label} className="rounded-lg bg-surface p-2.5"><dt className="font-mono text-[10px] text-muted">{label}</dt><dd className="mt-1 truncate font-mono text-xs font-medium text-ink">{value}</dd></div>)}</dl></section><SurgicalPatch key={node.path} path={node.path} code={code} findings={findings} /><section className="mt-6"><h3 className="font-display text-[13px] font-medium">Recommended action</h3><p className="mt-1.5 text-[13px] leading-[1.45] text-muted">{node.kind === 'ingested' ? node.recommendation : 'Review the findings and validate the change with a focused regression test.'}</p></section><section className="mt-6"><h3 className="font-display text-[13px] font-medium">Imports</h3><div className="mt-2 space-y-1">{imports.length ? imports.map((edge) => <button key={edge.id} type="button" onClick={() => onSelectNode(edge.target)} className="block w-full truncate rounded px-2 py-1.5 text-left font-mono text-[10px] text-muted hover:bg-surface hover:text-ink">→ {specimen?.nodes.find((candidate) => candidate.id === edge.target)?.name ?? edge.target}</button>) : <p className="text-xs text-muted">No indexed imports.</p>}</div><h3 className="mt-4 font-display text-[13px] font-medium">Imported by</h3><div className="mt-2 space-y-1">{importedBy.length ? importedBy.map((edge) => <button key={edge.id} type="button" onClick={() => onSelectNode(edge.source)} className="block w-full truncate rounded px-2 py-1.5 text-left font-mono text-[10px] text-muted hover:bg-surface hover:text-ink">← {specimen?.nodes.find((candidate) => candidate.id === edge.source)?.name ?? edge.source}</button>) : <p className="text-xs text-muted">No indexed dependents.</p>}</div></section><button type="button" onClick={onBlastRadius} className="mt-6 w-full rounded-xl bg-ink px-3 py-2.5 text-xs font-medium text-white hover:opacity-90">Analyze downstream blast radius →</button></div> : <div ref={codeRef} className="min-h-0 flex-1 p-3"><CodeBlock code={code} title={node.path} highlightRange={highlightRange} className="h-full" /></div> : <p className="p-5 text-xs text-muted">Select a file node to inspect it.</p>}
   </aside>;
 }
 function WorkspaceContent() {
@@ -574,6 +579,7 @@ function WorkspaceContent() {
   const [minRot, setMinRot] = useState(0);
   const [showComparison, setShowComparison] = useState(false);
   const [previousAudit, setPreviousAudit] = useState<{ files: number; averageRot: number } | null>(null);
+  const [briefOpen, setBriefOpen] = useState(false);
   const [camera, setCamera] = useState({ x: 0, y: 20, scale: 0.92 });
   const [requestState, setRequestState] = useState<
     { status: 'idle' | 'loading' | 'success'; repository?: string; partial?: boolean; showingSample?: boolean; isSlow?: boolean } | IngestErrorState
@@ -733,6 +739,10 @@ function WorkspaceContent() {
 
   const animateCamera = (next: { x: number; y: number; scale: number }) => setCamera(next);
 
+  const briefNodes = [...(specimen?.nodes ?? [])].sort((a, b) => b.rotScore - a.rotScore).slice(0, 3);
+  const briefText = specimen ? `${specimen.title} has ${specimen.nodes.length} analyzed files with an overall rot score of ${specimen.kind === 'ingested' ? specimen.overallRot : specimen.summary}. The top priorities are ${briefNodes.map((node) => node.name).join(', ')}.` : '';
+  const speakBrief = () => { if ('speechSynthesis' in window) { window.speechSynthesis.cancel(); const utterance = new SpeechSynthesisUtterance(briefText); utterance.rate = 1.02; window.speechSynthesis.speak(utterance); } };
+
   const title = specimen?.title ?? source?.repo ?? 'Necro-Docs workspace';
   const summary = specimen?.summary;
 
@@ -754,6 +764,7 @@ function WorkspaceContent() {
           <button type="button" aria-pressed={isolateHotspots} title="Dim files with rot score below 70" onClick={() => setIsolateHotspots((value) => !value)} className={`rounded-full border px-2.5 py-1 text-[12px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent ${isolateHotspots ? 'border-ink bg-ink text-white' : 'border-hairline text-ink hover:bg-surface'}`}>
             Focus hotspots
           </button>
+          <button type="button" onClick={() => setBriefOpen(true)} className="flex items-center gap-1.5 rounded-full border border-hairline px-2.5 py-1 text-[12px] font-normal text-muted hover:bg-surface" aria-label="Open repository brief"><FileText size={13} />Repo Brief</button>
           <button type="button" aria-label="Reset graph view" onClick={() => animateCamera({ x: 0, y: 20, scale: 0.92 })} className="flex items-center gap-1.5 rounded-full border border-hairline px-2 py-0.5 text-[12px] font-normal text-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">
             <RotateCcw size={13} aria-hidden="true" />
             <span>Reset view</span>
@@ -774,6 +785,7 @@ function WorkspaceContent() {
         <button type="button" onClick={() => exportReport('md')} className="flex items-center gap-1 rounded-full border border-hairline px-2 py-0.5 text-[12px] font-normal"><Download size={13} />Export MD</button><button type="button" onClick={() => exportReport('json')} className="rounded-full border border-hairline px-2 py-0.5 text-[12px] font-normal">JSON</button>
         <button type="button" onClick={loadPreviousAudit} className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[12px] font-normal ${showComparison ? 'border-ink bg-ink text-white' : 'border-hairline'}`}><GitCompare size={13} />Compare</button>
       </div>}
+      {briefOpen && specimen && <div role="dialog" aria-modal="true" aria-labelledby="repo-brief-title" className="fixed inset-0 z-50 flex items-center justify-center bg-ink/20 p-6" onClick={() => setBriefOpen(false)}><div className="w-full max-w-lg rounded-2xl border border-hairline bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><div className="flex items-center justify-between"><div><p className="font-mono text-[10px] text-muted">EXECUTIVE REPO BRIEFING</p><h2 id="repo-brief-title" className="mt-1 font-display text-lg font-medium">{specimen.title}</h2></div><button type="button" onClick={() => setBriefOpen(false)} className="rounded-full border border-hairline px-2.5 py-1 text-xs text-muted">Close</button></div><p className="mt-4 text-sm leading-relaxed text-muted">{briefText}</p><h3 className="mt-5 font-display text-[13px] font-medium">Top refactoring priorities</h3><ol className="mt-2 space-y-2">{briefNodes.map((node, index) => <li key={node.id} className="flex items-center justify-between rounded-lg bg-surface px-3 py-2 text-xs"><span><b className="mr-2 font-mono text-muted">0{index + 1}</b>{node.name}</span><span className="font-mono text-crimson">{node.rotScore} rot</span></li>)}</ol><button type="button" onClick={speakBrief} className="mt-5 flex items-center gap-2 rounded-xl bg-ink px-3 py-2 text-xs font-medium text-white"><Volume2 size={14} />Listen to 15s Brief</button></div></div>}
       {showComparison && specimen && <div className="z-10 border-b border-hairline bg-surface px-5 py-2 text-xs text-muted">Current audit: <strong className="text-ink">{specimen.nodes.length} files, {Math.round(specimen.nodes.reduce((sum, node) => sum + node.rotScore, 0) / Math.max(1, specimen.nodes.length))} average rot</strong>{previousAudit ? <> · Previous: <strong className="text-ink">{previousAudit.files} files, {previousAudit.averageRot} average rot</strong></> : ' · No previous audit for this repository yet.'}</div>}
 
       {requestState.status === 'loading' && (
