@@ -197,6 +197,7 @@ export function buildSeanceRequest(question: string, selectedNodeId: string | nu
     question: question.trim().slice(0, 500), selectedNodeId,
     specimenId: specimen.kind === 'preset' ? specimen.id : null,
     repositoryUrl: specimen.kind === 'ingested' ? specimen.repositoryUrl : null,
+    repoTitle: specimen.title,
     nodes: specimen.nodes.map(({ id, path, rotScore }) => ({ id, path, rotScore })),
     edges: specimen.edges.map(({ source, target }) => ({ source, target })),
   };

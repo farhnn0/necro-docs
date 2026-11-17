@@ -1,47 +1,116 @@
 import { NextResponse } from 'next/server';
-import type { ApiResponse } from '@/lib/types';
-import type { SeanceResponseData } from '@/lib/conversion/types';
 
-type SeanceBody = {
-  question?: unknown;
-  selectedNodeId?: unknown;
-  specimenId?: unknown;
-  repositoryUrl?: unknown;
-  nodes?: unknown;
-  edges?: unknown;
-};
-type SafeNode = { id: string; path: string; rotScore: number };
-type SafeEdge = { source: string; target: string };
+interface InputNode { id: string; path: string; name?: string; rotScore: number; code?: string; }
+interface InputEdge { source: string; target: string; }
+interface SeanceBody { question?: unknown; selectedNodeId?: unknown; nodes?: unknown; edges?: unknown; repoTitle?: unknown; }
+interface SeanceData { answer: string; spotlightNodeIds: string[]; riskLevel: 'low' | 'medium' | 'high'; selectNodeId?: string; audioBase64: string | null; }
 
-const errorResponse = (message: string, status = 400) => NextResponse.json<ApiResponse<null>>({ success: false, error: { code: 'INVALID_REQUEST', message } }, { status });
+const responseError = (message: string, status = 400) => NextResponse.json({ success: false, error: { code: 'INVALID_REQUEST', message } }, { status });
+
+function safeGraph(body: SeanceBody) {
+  const rawNodes = Array.isArray(body.nodes) ? body.nodes : [];
+  const rawEdges = Array.isArray(body.edges) ? body.edges : [];
+  const nodes: InputNode[] = rawNodes.filter((item): item is InputNode => {
+    if (!item || typeof item !== 'object') return false;
+    const n = item as Record<string, unknown>;
+    return typeof n.id === 'string' && typeof n.path === 'string' && typeof n.rotScore === 'number' && Number.isFinite(n.rotScore);
+  }).slice(0, 200).map((n) => ({ id: n.id, path: n.path.slice(0, 500), name: typeof n.name === 'string' ? n.name : n.path.split('/').pop(), rotScore: Math.max(0, Math.min(100, n.rotScore)), code: typeof n.code === 'string' ? n.code.slice(0, 12_000) : undefined }));
+  const ids = new Set(nodes.map((node) => node.id));
+  const edges: InputEdge[] = rawEdges.filter((item): item is InputEdge => {
+    if (!item || typeof item !== 'object') return false;
+    const e = item as Record<string, unknown>;
+    return typeof e.source === 'string' && typeof e.target === 'string' && ids.has(e.source) && ids.has(e.target);
+  }).slice(0, 500).map((edge) => ({ source: edge.source, target: edge.target }));
+  return { nodes, edges, ids };
+}
+
+function fallback(question: string, selectedNodeId: string | null, nodes: InputNode[], edges: InputEdge[]): SeanceData {
+  const normalized = question.toLowerCase();
+  const focus = nodes.find((node) => normalized.includes(node.id.toLowerCase()) || normalized.includes(node.path.toLowerCase()))
+    ?? nodes.find((node) => node.id === selectedNodeId)
+    ?? [...nodes].sort((a, b) => b.rotScore - a.rotScore)[0];
+  if (!focus) return { answer: 'No analyzed file is available to inspect yet.', spotlightNodeIds: [], riskLevel: 'low', audioBase64: null };
+  const upstream = edges.filter((edge) => edge.target === focus.id).map((edge) => nodes.find((node) => node.id === edge.source)?.name ?? edge.source);
+  const downstreamIds = edges.filter((edge) => edge.source === focus.id).map((edge) => edge.target);
+  const downstream = downstreamIds.map((id) => nodes.find((node) => node.id === id)?.name ?? id);
+  const answer = `${focus.name} has a rot score of ${focus.rotScore}. ${upstream.length ? `${upstream.join(', ')} depend on it upstream, and ` : ''}${downstream.length ? `a change can reach ${downstream.join(', ')} downstream.` : 'no downstream dependency was found in the analyzed graph.'}`;
+  return { answer, spotlightNodeIds: [focus.id, ...upstream.map((name) => nodes.find((node) => node.name === name)?.id).filter((id): id is string => Boolean(id)), ...downstreamIds], riskLevel: focus.rotScore >= 70 ? 'high' : focus.rotScore >= 40 ? 'medium' : 'low', selectNodeId: focus.id, audioBase64: null };
+}
+
+function promptFor(question: string, repoTitle: string, focus: InputNode | undefined, neighbors: InputNode[], highRisk: InputNode[], edges: InputEdge[]) {
+  return `You are Senior Code Archaeologist for ${repoTitle}. Answer the developer's question using only this graph and code evidence.
+Question: ${question}
+Focused file: ${JSON.stringify(focus)}
+Direct neighbors: ${JSON.stringify(neighbors)}
+Highest-risk files: ${JSON.stringify(highRisk)}
+Relevant edges: ${JSON.stringify(edges)}
+Return JSON only: {"answer":"2-3 natural sentences for text-to-speech","spotlightNodeIds":["valid node ids"],"riskLevel":"low|medium|high"}.
+The answer must name concrete files, contain no markdown, bullets, backticks, or asterisks. Spotlight only IDs from the supplied nodes.`;
+}
+
+function parseAi(text: string, ids: Set<string>): Omit<SeanceData, 'audioBase64'> | null {
+  try {
+    const raw = JSON.parse(text.replace(/^\s*```json\s*/i, '').replace(/```\s*$/, '')) as Record<string, unknown>;
+    if (typeof raw.answer !== 'string') return null;
+    const spotlightNodeIds = Array.isArray(raw.spotlightNodeIds) ? raw.spotlightNodeIds.filter((id): id is string => typeof id === 'string' && ids.has(id)).slice(0, 30) : [];
+    const riskLevel = raw.riskLevel === 'high' || raw.riskLevel === 'medium' ? raw.riskLevel : 'low';
+    return { answer: raw.answer.replace(/[*`#\n•-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 900), spotlightNodeIds, riskLevel };
+  } catch { return null; }
+}
+
+async function askAi(prompt: string, signal: AbortSignal): Promise<string | null> {
+  const geminiKey = process.env.GEMINI_API_KEY?.trim();
+  if (geminiKey) {
+    const model = process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash';
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, { method: 'POST', signal, headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.2, maxOutputTokens: 900, ...(model.includes('2.5-flash') ? { thinkingConfig: { thinkingBudget: 0 } } : {}) } }) });
+    if (!response.ok) return null;
+    const data = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> };
+    return (data.candidates?.[0]?.content?.parts ?? []).filter((part) => !part.thought && part.text).map((part) => part.text).join('') || null;
+  }
+  const key = process.env.OPENAI_API_KEY?.trim();
+  if (key) {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', { method: 'POST', signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body: JSON.stringify({ model: process.env.OPENAI_MODEL || 'gpt-4o-mini', temperature: 0.2, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: 'Return only valid JSON.' }, { role: 'user', content: prompt }] }) });
+    if (!response.ok) return null;
+    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+    return data.choices?.[0]?.message?.content ?? null;
+  }
+  return null;
+}
+
+async function synthesizeAudio(text: string): Promise<string | null> {
+  const key = process.env.ELEVENLABS_API_KEY?.trim();
+  if (!key) return null;
+  const voice = process.env.ELEVENLABS_VOICE_ID?.trim() || '21m00Tcm4TlvDq8ikWAM';
+  const configuredModel = process.env.ELEVENLABS_MODEL_ID?.trim();
+  const model = configuredModel && /^[a-z0-9_-]+$/i.test(configuredModel) ? configuredModel : 'eleven_multilingual_v2';
+  try {
+    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}`, { method: 'POST', headers: { 'xi-api-key': key, 'Content-Type': 'application/json', Accept: 'audio/mpeg' }, body: JSON.stringify({ text: text.slice(0, 1000), model_id: model, output_format: 'mp3_44100_128' }), signal: AbortSignal.timeout(15_000) });
+    if (!response.ok) return null;
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    let binary = ''; for (const byte of bytes) binary += String.fromCharCode(byte);
+    return Buffer.from(binary, 'binary').toString('base64');
+  } catch { return null; }
+}
 
 export async function POST(request: Request) {
   let body: SeanceBody;
-  try { body = await request.json() as SeanceBody; } catch { return errorResponse('Request body must be valid JSON.'); }
-  if ('rawContent' in body) return errorResponse('Source content is not accepted.');
+  try { body = await request.json() as SeanceBody; } catch { return responseError('Request body must be valid JSON.'); }
+  if ('rawContent' in body) return responseError('Source content is not accepted.');
   const question = typeof body.question === 'string' ? body.question.trim().slice(0, 500) : '';
-  const nodes = Array.isArray(body.nodes) ? body.nodes : [];
-  const edges = Array.isArray(body.edges) ? body.edges : [];
-  if (!question || nodes.length > 200 || edges.length > 500) return errorResponse('Question or graph exceeds the request limits.');
-  const safeNodes: SafeNode[] = nodes.filter((node): node is SafeNode => {
-    if (!node || typeof node !== 'object') return false;
-    const value = node as Record<string, unknown>;
-    return typeof value.id === 'string' && typeof value.path === 'string' && typeof value.rotScore === 'number' && Number.isFinite(value.rotScore);
-  }).map((node) => ({ id: node.id, path: node.path.slice(0, 500), rotScore: Math.max(0, Math.min(100, node.rotScore)) }));
-  const ids = new Set(safeNodes.map((node) => node.id));
-  const safeEdges: SafeEdge[] = edges.filter((edge): edge is SafeEdge => {
-    if (!edge || typeof edge !== 'object') return false;
-    const value = edge as Record<string, unknown>;
-    return typeof value.source === 'string' && typeof value.target === 'string' && ids.has(value.source) && ids.has(value.target);
-  }).map((edge) => ({ source: edge.source, target: edge.target }));
-  const normalized = question.toLowerCase();
-  const selected = typeof body.selectedNodeId === 'string' && ids.has(body.selectedNodeId) ? body.selectedNodeId : undefined;
-  const mentioned = safeNodes.find((node) => normalized.includes(node.id.toLowerCase()) || normalized.includes(node.path.toLowerCase()));
-  const focus = mentioned ?? safeNodes.find((node) => node.id === selected) ?? [...safeNodes].sort((a, b) => b.rotScore - a.rotScore)[0];
-  const downstream = focus ? safeEdges.filter((edge) => edge.source === focus.id).map((edge) => edge.target) : [];
-  const answer = focus
-    ? `${focus.path} has a rot score of ${focus.rotScore}. ${downstream.length ? `Changes may affect ${downstream.join(', ')} downstream.` : 'No downstream files were found in the submitted graph.'}`
-    : 'No graph nodes were submitted to inspect.';
-  const data: SeanceResponseData = { answer, spotlightNodeIds: focus ? [focus.id, ...downstream] : [], ...(focus ? { selectNodeId: focus.id } : {}) };
-  return NextResponse.json<ApiResponse<SeanceResponseData>>({ success: true, data });
+  if (!question) return responseError('A question is required.');
+  const { nodes, edges, ids } = safeGraph(body);
+  if (nodes.length > 200 || edges.length > 500) return responseError('Question or graph exceeds the request limits.');
+  const selectedNodeId = typeof body.selectedNodeId === 'string' && ids.has(body.selectedNodeId) ? body.selectedNodeId : null;
+  const focus = nodes.find((node) => node.id === selectedNodeId);
+  const neighborIds = new Set(edges.filter((edge) => edge.source === selectedNodeId || edge.target === selectedNodeId).flatMap((edge) => [edge.source, edge.target]));
+  const neighbors = nodes.filter((node) => neighborIds.has(node.id) && node.id !== selectedNodeId);
+  const highRisk = [...nodes].sort((a, b) => b.rotScore - a.rotScore).slice(0, 5);
+  let data = fallback(question, selectedNodeId, nodes, edges);
+  try {
+    const ai = await askAi(promptFor(question, typeof body.repoTitle === 'string' ? body.repoTitle : 'this repository', focus, neighbors, highRisk, edges.filter((edge) => neighborIds.has(edge.source) || neighborIds.has(edge.target))), AbortSignal.timeout(30_000));
+    const parsed = ai ? parseAi(ai, ids) : null;
+    if (parsed) data = { ...parsed, selectNodeId: data.selectNodeId, audioBase64: null };
+  } catch { /* graph fallback remains successful */ }
+  data.audioBase64 = await synthesizeAudio(data.answer);
+  return NextResponse.json({ success: true, data });
 }

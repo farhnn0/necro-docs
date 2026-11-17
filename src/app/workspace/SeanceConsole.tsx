@@ -42,6 +42,9 @@ export default function SeanceConsole({ specimen, selectedNodeId, onSpotlight }:
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const speechRecognitionRef = useRef<SpeechRecognitionConstructor | null>(null);
   const speechTimerRef = useRef<number | null>(null);
+  const speechAudioRef = useRef<HTMLAudioElement | null>(null);
+  const speechTranscriptRef = useRef('');
+  const speechSubmittedRef = useRef(false);
   const speechStartedRef = useRef(false);
   const [transcript, setTranscript] = useState(initialTranscript);
   const [, setThinking] = useState(false);
@@ -55,11 +58,23 @@ export default function SeanceConsole({ specimen, selectedNodeId, onSpotlight }:
     if (speechTimerRef.current !== null) window.clearTimeout(speechTimerRef.current);
     speechTimerRef.current = null;
     speechStartedRef.current = false;
+    speechAudioRef.current?.pause();
+    speechAudioRef.current = null;
     setIsSpeaking(false);
   };
 
-  const speakReply = (reply: string) => {
+  const speakReply = (reply: string, audioBase64?: string | null) => {
     stopSpeaking();
+    if (audioBase64) {
+      const audio = new Audio(`data:audio/mp3;base64,${audioBase64}`);
+      speechAudioRef.current = audio;
+      setIsSpeaking(true);
+      setSpeechStatus('Speaking.');
+      audio.onended = stopSpeaking;
+      audio.onerror = () => { stopSpeaking(); setSpeechStatus('Audio playback failed.'); };
+      void audio.play().catch(() => { stopSpeaking(); speakReply(reply); });
+      return;
+    }
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
       setSpeechStatus('Speech output is not supported in this browser.');
       return;
@@ -109,20 +124,29 @@ export default function SeanceConsole({ specimen, selectedNodeId, onSpotlight }:
     const recognition = new Constructor();
     recognition.lang = 'en-US';
     recognition.continuous = false;
-    recognition.interimResults = false;
+    recognition.interimResults = true;
+    speechTranscriptRef.current = '';
+    speechSubmittedRef.current = false;
     recognition.onresult = (event) => {
       const question = Array.from({ length: event.results.length }, (_, index) => event.results[index][0]?.transcript ?? '').join('').trim();
-      stopRecognition();
-      if (!question) return;
-      if (inputRef.current) inputRef.current.value = question;
-      void submit(question);
+      speechTranscriptRef.current = question;
+      setSpeechStatus(question ? `Heard: ${question}` : 'Listening…');
     };
     recognition.onerror = (event) => {
       setSpeechStatus(speechErrorMessages[event.error] ?? 'Speech recognition failed. You can still type a question.');
       stopRecognition();
       inputRef.current?.focus();
     };
-    recognition.onend = () => { recognitionRef.current = null; setIsListening(false); };
+    recognition.onend = () => {
+      recognitionRef.current = null;
+      setIsListening(false);
+      const question = speechTranscriptRef.current.trim();
+      if (!speechSubmittedRef.current && question) {
+        speechSubmittedRef.current = true;
+        if (inputRef.current) inputRef.current.value = question;
+        void submit(question);
+      }
+    };
     recognitionRef.current = recognition;
     setIsListening(true);
     setSpeechStatus('Listeningâ€¦');
@@ -173,7 +197,7 @@ export default function SeanceConsole({ specimen, selectedNodeId, onSpotlight }:
       const spotlight = filterSpotlight(payload.data, specimen);
       onSpotlight(spotlight);
       setTranscript(`${question}\n\n${payload.data.answer}`);
-      speakReply(payload.data.answer);
+      speakReply(payload.data.answer, payload.data.audioBase64);
     } catch {
       if (controller.signal.aborted) return;
       const answer = fallback(question);
@@ -193,7 +217,7 @@ export default function SeanceConsole({ specimen, selectedNodeId, onSpotlight }:
       {chatOpen && <div className="flex flex-wrap gap-1.5 px-4 pt-3" aria-label="Quick questions">{(specimen ? quickQuestions(specimen) : []).map(({ question }) => <button key={question} type="button" onClick={() => { if (inputRef.current) inputRef.current.value = question; void submit(question); }} className="rounded-full border border-hairline bg-surface px-2.5 py-1 text-[10px] font-medium text-ink hover:bg-hairline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">{question}</button>)}</div>}
       <form onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void submit(inputRef.current?.value ?? ''); }} onFocus={() => setChatOpen(true)} className={`flex h-16 items-center gap-2 px-3 ${chatOpen ? 'border-t border-hairline' : ''}`}>
         <label htmlFor="seance-question" className="sr-only">Ask a question</label><input ref={inputRef} id="seance-question" name="seance-question" type="text" className="min-w-0 flex-1 bg-transparent px-2 text-sm text-ink outline-none placeholder:text-muted focus-visible:ring-2 focus-visible:ring-skyAccent" placeholder="Ask the code archaeologist…" />
-        <button type="submit" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-ink text-[11px] font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent" aria-label="Send question">↵</button><button type="button" onClick={toggleRecognition} disabled={!speechRecognition && !isListening} aria-label={isListening ? 'Listening…' : 'Ask by voice'} aria-pressed={isListening} title={speechRecognition ? (isListening ? 'Stop listening' : 'Ask by voice') : 'Voice input is not supported in this browser'} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-hairline text-ink disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent"><Mic size={15} aria-hidden="true" /></button><div className={`flex items-center gap-1 px-1 ${isSpeaking ? 'is-speaking' : ''}`} aria-label="Speech waveform" aria-hidden="true">{[2, 3.5, 5, 3, 4, 2.5, 4].map((height, index) => <span key={index} className="wave-bar w-0.5 bg-ink" style={{ height: `${height * 3}px` }} />)}</div>
+        <button type="submit" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-ink text-[11px] font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent" aria-label="Send question">↵</button><button type="button" onClick={toggleRecognition} disabled={!speechRecognition && !isListening} aria-label={isListening ? 'Listening…' : 'Ask by voice'} aria-pressed={isListening} title={speechRecognition ? (isListening ? 'Stop listening' : 'Ask by voice') : 'Voice input is not supported in this browser'} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-hairline text-ink disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent"><Mic size={15} aria-hidden="true" /></button><button type="button" onClick={stopSpeaking} disabled={!isSpeaking} aria-label="Mute and stop voice" className="flex h-9 shrink-0 items-center justify-center rounded-xl border border-hairline px-2 text-[10px] text-muted disabled:opacity-40">{isSpeaking ? 'Mute' : 'Voice'}</button><div className={`flex items-center gap-1 px-1 ${isSpeaking ? 'is-speaking' : ''}`} aria-label="Speech waveform" aria-hidden="true">{[2, 3.5, 5, 3, 4, 2.5, 4].map((height, index) => <span key={index} className="wave-bar w-0.5 bg-ink" style={{ height: `${height * 3}px` }} />)}</div>
       </form>
     </div>
   </section>;

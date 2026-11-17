@@ -32,7 +32,7 @@ import {
   isPresetId,
   PRESET_IDS,
 } from '@/lib/conversion/specimens';
-import type { IngestedWorkspaceNode, IngestErrorState, PresetId, Specimen, WorkspaceNode } from '@/lib/conversion/types';
+import type { IngestedWorkspaceNode, IngestErrorState, PresetId, Specimen, SpotlightState, WorkspaceNode } from '@/lib/conversion/types';
 import type { RepoAnalysis } from '@/lib/repoAnalyzer';
 import type { ApiResponse } from '@/lib/types';
 import SeanceConsole from './SeanceConsole';
@@ -363,8 +363,10 @@ function GraphViewport({
                 const targetY = targetPos.y + NODE_HEIGHT / 2;
                 const bend = Math.max(48, Math.abs(targetX - sourceX) * 0.45);
                 const active = selectedNodeId === edge.source || selectedNodeId === edge.target || spotlight.has(edge.target);
+                const spotlightEdge = spotlight.size > 0 && spotlight.has(edge.target);
+                const edgeColor = spotlightEdge ? '#0284C7' : active ? '#111113' : '#D4D4D8';
                 const hidden = visibleNodeIds && (!visibleNodeIds.has(edge.source) || !visibleNodeIds.has(edge.target));
-                return <path key={edge.id} d={`M ${sourceX} ${sourceY} C ${sourceX + bend} ${sourceY}, ${targetX - bend} ${targetY}, ${targetX} ${targetY}`} fill="none" stroke={active ? (spotlight.has(edge.target) ? '#0284C7' : '#111113') : '#D4D4D8'} strokeWidth={selectedNodeId && active ? 1.8 : 1.2} opacity={hidden ? 0.08 : 1} />;
+                return <path key={edge.id} d={`M ${sourceX} ${sourceY} C ${sourceX + bend} ${sourceY}, ${targetX - bend} ${targetY}, ${targetX} ${targetY}`} fill="none" stroke={edgeColor} strokeWidth={selectedNodeId && active ? 1.8 : 1.2} opacity={hidden ? 0.08 : 1} />;
               })}
             </svg>
             {validNodes.map((node) => {
@@ -701,10 +703,14 @@ function WorkspaceContent() {
 
   const selectNode = (nodeId: string | null) => {
     if (nodeId === null) {
+      setSpotlightNodeIds([]);
       setSelectedNodeId(null);
       return;
     }
-    if ((specimen?.nodes ?? []).some((node) => node.id === nodeId)) setSelectedNodeId(nodeId);
+    if ((specimen?.nodes ?? []).some((node) => node.id === nodeId)) {
+      setSpotlightNodeIds([]);
+      setSelectedNodeId(nodeId);
+    }
   };
 
   const visibleNodeIds = useMemo(() => {
@@ -742,6 +748,18 @@ function WorkspaceContent() {
   const briefNodes = [...(specimen?.nodes ?? [])].sort((a, b) => b.rotScore - a.rotScore).slice(0, 3);
   const briefText = specimen ? `${specimen.title} has ${specimen.nodes.length} analyzed files with an overall rot score of ${specimen.kind === 'ingested' ? specimen.overallRot : specimen.summary}. The top priorities are ${briefNodes.map((node) => node.name).join(', ')}.` : '';
   const speakBrief = () => { if ('speechSynthesis' in window) { window.speechSynthesis.cancel(); const utterance = new SpeechSynthesisUtterance(briefText); utterance.rate = 1.02; window.speechSynthesis.speak(utterance); } };
+
+  const handleSpotlight = ({ nodeIds, selectedNodeId: responseSelection }: SpotlightState) => {
+    setSpotlightNodeIds(nodeIds);
+    if (responseSelection) setSelectedNodeId(responseSelection);
+    const selected = (specimen?.nodes ?? []).filter((node) => nodeIds.includes(node.id));
+    if (selected.length === 0) return;
+    const minX = Math.min(...selected.map((node) => node.position.x));
+    const maxX = Math.max(...selected.map((node) => node.position.x + NODE_WIDTH));
+    const minY = Math.min(...selected.map((node) => node.position.y));
+    const maxY = Math.max(...selected.map((node) => node.position.y + NODE_HEIGHT));
+    setCamera({ x: GRAPH_WIDTH / 2 - (minX + maxX) / 2, y: GRAPH_HEIGHT / 2 - (minY + maxY) / 2, scale: selected.length > 2 ? 0.7 : 0.86 });
+  };
 
   const title = specimen?.title ?? source?.repo ?? 'Necro-Docs workspace';
   const summary = specimen?.summary;
@@ -817,10 +835,7 @@ function WorkspaceContent() {
               onSelectNode={selectNode}
               isolateHotspots={isolateHotspots}
             />
-            {selectedNodeId && <SeanceConsole specimen={specimen} selectedNodeId={selectedNodeId} onSpotlight={({ nodeIds, selectedNodeId: responseSelection }) => {
-              setSpotlightNodeIds(nodeIds);
-              if (responseSelection) setSelectedNodeId(responseSelection);
-            }} />}
+            {selectedNodeId && <SeanceConsole specimen={specimen} selectedNodeId={selectedNodeId} onSpotlight={handleSpotlight} />}
           </div>
           {selectedNodeId && <DetailPanel specimen={specimen} selectedNodeId={selectedNodeId} onBlastRadius={analyzeBlastRadius} onSelectNode={selectNode} onClose={() => setSelectedNodeId(null)} />}
         </div>

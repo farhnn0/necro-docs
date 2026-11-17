@@ -105,6 +105,7 @@ export interface SeanceRequest {
   selectedNodeId: string | null;
   specimenId: PresetId | null;
   repositoryUrl: string | null;
+  repoTitle: string;
   nodes: SeanceRequestNode[];
   edges: SeanceRequestEdge[];
 }
@@ -113,6 +114,8 @@ export interface SeanceResponseData {
   answer: string;
   spotlightNodeIds: string[];
   selectNodeId?: string;
+  riskLevel?: 'low' | 'medium' | 'high';
+  audioBase64?: string | null;
 }
 
 export type SeanceResponse = ApiResponse<SeanceResponseData>;
