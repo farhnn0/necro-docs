@@ -271,6 +271,7 @@ interface Scanned {
   lines: string[];
   codeText: string;
   loc: number;
+  codeLoc: number;
   branches: number;
   depth: number;
   issues: Issue[];
@@ -530,7 +531,8 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
   const codeText = code.join('\n');
   const bareText = bare.join('\n');
   const { lineAt, offsets } = lineIndex(bareText);
-  const loc = code.filter((l) => l.trim() !== '').length;
+  const loc = lines.length;
+  const codeLoc = code.filter((l) => l.trim() !== '').length;
   const branches = (bareText.match(BRANCH_RE[lang]) ?? []).length;
   const { depth, line: depthLine } = indentDepth(code);
   const issues: Issue[] = [];
@@ -602,11 +604,11 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
     issues.push({ severity: 50, line: depthLine, text: `Line ${depthLine}: Nesting reaches ${depth} levels deep.` });
   }
   if (branches >= 15) {
-    issues.push({ severity: 40, line: null, text: `High cyclomatic complexity (${branches} branches across ${loc} LOC).` });
+    issues.push({ severity: 40, line: null, text: `High cyclomatic complexity (${branches} branches across ${loc} lines).` });
   }
 
   const name = path.split('/').pop() ?? path;
-  return { path, name, lang, lines, codeText, loc, branches, depth, issues, silent };
+  return { path, name, lang, lines, codeText, loc, codeLoc, branches, depth, issues, silent };
 }
 
 // ============================================================================
@@ -638,11 +640,11 @@ function resolveEdges(files: Scanned[]): RepoEdge[] {
 
 function rotScore(f: Scanned, degree: number): number {
   const volume =
-    f.loc > ROT.VOLUME_FREE_LOC
-      ? Math.min(ROT.VOLUME_MAX, ((f.loc - ROT.VOLUME_FREE_LOC) / (ROT.VOLUME_FULL_LOC - ROT.VOLUME_FREE_LOC)) * ROT.VOLUME_MAX)
+    f.codeLoc > ROT.VOLUME_FREE_LOC
+      ? Math.min(ROT.VOLUME_MAX, ((f.codeLoc - ROT.VOLUME_FREE_LOC) / (ROT.VOLUME_FULL_LOC - ROT.VOLUME_FREE_LOC)) * ROT.VOLUME_MAX)
       : 0;
   const nesting = Math.min(ROT.NESTING_MAX, Math.max(0, f.depth - ROT.NESTING_FREE_DEPTH) * ROT.NESTING_PER_LEVEL);
-  const branching = Math.min(ROT.BRANCH_MAX, (f.branches / Math.max(f.loc, 1)) * 100 * ROT.BRANCH_PER_PERCENT);
+  const branching = Math.min(ROT.BRANCH_MAX, (f.branches / Math.max(f.codeLoc, 1)) * 100 * ROT.BRANCH_PER_PERCENT);
   const silent = Math.min(ROT.SILENT_MAX, f.silent);
   const coupling = Math.min(ROT.COUPLING_MAX, degree * ROT.COUPLING_PER_LINK);
   return Math.max(0, Math.min(100, Math.round(volume + nesting + branching + silent + coupling)));
@@ -778,9 +780,9 @@ function fallbackExplanation(f: Scanned, degree: { in: number; out: number }, sc
         : 'It has no import relationships with the other analyzed files.';
   const summary = `${f.name} is ${article} ${role} in ${dir}${exposes}. ${reach}`;
 
-  const density = f.loc ? f.branches / f.loc : 0;
+  const density = f.codeLoc ? f.branches / f.codeLoc : 0;
   const level = density < 0.08 ? 'low' : density < 0.18 ? 'moderate' : 'high';
-  const complexity = `Branching complexity is ${level}: ${f.branches} decision point${f.branches === 1 ? '' : 's'} across ${f.loc} executable lines, nested up to ${f.depth} level${f.depth === 1 ? '' : 's'} deep.`;
+  const complexity = `Branching complexity is ${level}: ${f.branches} decision point${f.branches === 1 ? '' : 's'} across ${f.codeLoc} code lines in a ${f.loc}-line file, nested up to ${f.depth} level${f.depth === 1 ? '' : 's'} deep.`;
   const ranked = [...f.issues].sort((a, b) => b.severity - a.severity || (a.line ?? 0) - (b.line ?? 0));
   const findings = ranked.slice(0, 3).map((issue) => issue.text);
   if (findings.length === 0) findings.push('No swallowed errors, eval() calls, type suppressions, or debt comments were detected.');
@@ -1142,7 +1144,7 @@ export async function analyzeRepository(repoUrl: string, options: AnalyzeOptions
       const ranked = [...f.issues].sort((a, b) => b.severity - a.severity || (a.line ?? 0) - (b.line ?? 0));
       const staticFindings = ranked.slice(0, 4).map((issue) => issue.text);
       const facts = [
-        `${f.loc} executable lines with ${f.branches} decision points and a maximum nesting depth of ${f.depth}.`,
+        `${f.loc} lines (${f.codeLoc} code lines) with ${f.branches} decision points and a maximum nesting depth of ${f.depth}.`,
         `Imports ${d.out} module${d.out === 1 ? '' : 's'} and is imported by ${d.in} file${d.in === 1 ? '' : 's'} in this analysis.`,
       ];
       for (let i = 0; staticFindings.length < 2 && i < facts.length; i++) staticFindings.push(facts[i]);
