@@ -193,6 +193,36 @@ select {
   animation: wavePulse 0.55s ease-in-out infinite;
 }
 
+@keyframes toast-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-18px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes toast-slide-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-14px) scale(0.95);
+  }
+}
+
+.toast-root {
+  animation: toast-slide-in 240ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.toast-root[data-ending-style] {
+  animation: toast-slide-out 180ms ease-in forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

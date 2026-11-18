@@ -42,7 +42,8 @@ import type { IngestErrorState, PresetId, Specimen, SpotlightState, WorkspaceNod
 import type { RepoAnalysis } from '@/lib/repoAnalyzer';
 import type { ApiResponse } from '@/lib/types';
 import SeanceConsole from './SeanceConsole';
-import { SurgicalPatch } from './SurgicalPatch';
+import { SurgicalPatch, type CachedPatch } from './SurgicalPatch';
+import { toast } from '@/components/ui/toast';
 
 const initialTranscript =
   'Select any file node or ask a question aloud to trace downstream dependencies.';
@@ -131,6 +132,7 @@ function DraggableGraphNode({
   dimmed,
   meta,
   impactTag,
+  hasPatch = false,
   onSelectNode,
 }: {
   node: WorkspaceNode;
@@ -140,6 +142,7 @@ function DraggableGraphNode({
   dimmed: boolean;
   meta: RotScoreMeta;
   impactTag?: 'Direct impact' | 'Downstream sink';
+  hasPatch?: boolean;
   onSelectNode: (nodeId: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -166,7 +169,9 @@ function DraggableGraphNode({
         event.stopPropagation();
         onSelectNode(node.id);
       }}
-      className={`absolute flex h-[132px] w-[226px] select-none cursor-grab active:cursor-grabbing flex-col justify-between rounded-2xl border border-hairline bg-white p-3 shadow-sm transition-shadow hover:shadow-md ${
+      className={`absolute flex h-[132px] w-[226px] select-none cursor-grab active:cursor-grabbing flex-col justify-between rounded-2xl border ${
+        hasPatch && !selected && !isSpotlight ? 'border-emerald/40' : 'border-hairline'
+      } bg-white p-3 shadow-sm transition-shadow hover:shadow-md ${
         isDragging ? 'z-50 shadow-xl ring-2 ring-skyAccent opacity-95' : ''
       } ${selected ? 'ring-2 ring-ink' : isSpotlight ? 'ring-2 ring-skyAccent' : ''} ${
         dimmed ? 'opacity-[.22]' : 'opacity-100'
@@ -178,6 +183,7 @@ function DraggableGraphNode({
       }}
     >
       {impactTag && <span className="absolute -top-2 left-3 rounded-full bg-skyAccent px-2 py-0.5 font-mono text-[9px] font-medium text-white shadow-sm">{impactTag}</span>}
+      {hasPatch && <span className="absolute -top-2 right-3 rounded-full bg-emerald px-2 py-0.5 font-mono text-[9px] font-bold tracking-wide text-white shadow-2xs">PATCH READY</span>}
       <div className="flex items-start justify-between gap-3 font-mono text-[10px]">
         <div className="flex items-center gap-1.5 text-muted">
           <GripVertical size={13} className="shrink-0 text-muted/50" aria-hidden="true" />
@@ -198,21 +204,26 @@ function DraggableGraphNode({
 function GraphViewport({
   specimen,
   selectedNodeId,
+  impactOriginId = null,
   spotlightNodeIds,
   camera,
   isolateHotspots = false,
   visibleNodeIds,
   onCameraChange,
   onSelectNode,
+  synthesizedPatches,
 }: {
   specimen: Specimen | null;
   selectedNodeId: string | null;
+  /** File the blast radius was computed from. Outlives the inspector, so closing it keeps the labels stable. */
+  impactOriginId?: string | null;
   spotlightNodeIds: string[];
   camera: { x: number; y: number; scale: number };
   isolateHotspots?: boolean;
   visibleNodeIds?: Set<string>;
   onCameraChange: (camera: { x: number; y: number; scale: number }) => void;
   onSelectNode: (nodeId: string | null) => void;
+  synthesizedPatches?: Record<string, CachedPatch>;
 }) {
   const viewportRef = useRef<HTMLElement>(null);
   const dragRef = useRef<{ pointerId: number; x: number; y: number; cameraX: number; cameraY: number; moved: boolean } | null>(null);
@@ -379,10 +390,12 @@ function GraphViewport({
               const selected = node.id === selectedNodeId;
               const isSpotlight = spotlight.has(node.id);
               const dimmed = (visibleNodeIds && !visibleNodeIds.has(node.id)) || (isolateHotspots && node.rotScore < 70 && !selected && !isSpotlight);
-              const directImpact = selectedNodeId !== null && validEdges.some((edge) => edge.source === selectedNodeId && edge.target === node.id);
-              const impactTag = directImpact ? 'Direct impact' : isSpotlight && !selected ? 'Downstream sink' : undefined;
+              const focusId = selectedNodeId ?? impactOriginId;
+              const directImpact = focusId !== null && validEdges.some((edge) => edge.source === focusId && edge.target === node.id);
+              const impactTag = directImpact ? 'Direct impact' : isSpotlight && node.id !== focusId ? 'Downstream sink' : undefined;
               const meta = rotScoreMeta(node.rotScore);
               const pos = getNodePos(node);
+              const hasPatch = Boolean(synthesizedPatches?.[node.path]);
               return (
                 <DraggableGraphNode
                   key={node.id}
@@ -393,6 +406,7 @@ function GraphViewport({
                   dimmed={dimmed}
                   meta={meta}
                   impactTag={impactTag}
+                  hasPatch={hasPatch}
                   onSelectNode={onSelectNode}
                 />
               );
@@ -502,12 +516,22 @@ export function LegacySeanceSlot({ specimen, onQuickQuestion, onSubmit }: { spec
   );
 }
 
-function DetailPanel({ specimen, selectedNodeId, onClose, onBlastRadius, onSelectNode }: {
+function DetailPanel({
+  specimen,
+  selectedNodeId,
+  onClose,
+  onBlastRadius,
+  onSelectNode,
+  synthesizedPatches,
+  onSavePatch,
+}: {
   specimen: Specimen | null;
   selectedNodeId: string | null;
   onClose: () => void;
   onBlastRadius: () => void;
   onSelectNode: (nodeId: string) => void;
+  synthesizedPatches: Record<string, CachedPatch>;
+  onSavePatch: (path: string, patch: CachedPatch) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [tab, setTab] = useState<'overview' | 'source'>('overview');
@@ -519,6 +543,7 @@ function DetailPanel({ specimen, selectedNodeId, onClose, onBlastRadius, onSelec
   const imports = node ? specimen?.edges.filter((edge) => edge.source === node.id) ?? [] : [];
   const importedBy = node ? specimen?.edges.filter((edge) => edge.target === node.id) ?? [] : [];
   const meta = node ? rotScoreMeta(node.rotScore) : null;
+  const hasSynthesizedPatch = node ? Boolean(synthesizedPatches[node.path]) : false;
 
   useEffect(() => {
     if (tab !== 'source' || highlightRange === null) return;
@@ -538,10 +563,8 @@ function DetailPanel({ specimen, selectedNodeId, onClose, onBlastRadius, onSelec
     setTab('source');
   };
 
-
-
-  return <aside aria-label="Specimen detail panel" className={`absolute right-4 top-20 z-20 flex max-h-[calc(100vh-6rem)] ${expanded ? 'w-[540px]' : 'w-[380px]'} flex-col overflow-hidden rounded-[24px] border border-[#E8E9ED] bg-white/95 shadow-[0_20px_50px_-12px_rgba(17,17,19,0.12)] backdrop-blur-md transition-all duration-200 max-sm:left-4 max-sm:right-4 max-sm:w-auto`}>
-    <header className="shrink-0 border-b border-hairline p-4">
+  return <aside aria-label="Specimen detail panel" className={`absolute right-4 top-20 bottom-4 z-20 flex min-h-0 ${expanded ? 'w-[560px]' : 'w-[400px]'} flex-col overflow-hidden rounded-[24px] border border-[#E8E9ED] bg-white/95 shadow-[0_20px_50px_-12px_rgba(17,17,19,0.12)] backdrop-blur-md transition-all duration-200 max-sm:left-4 max-sm:right-4 max-sm:top-20 max-sm:bottom-4 max-sm:w-auto`}>
+    <header className="shrink-0 border-b border-hairline bg-white/50 p-3.5 pb-2.5">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className="rounded-md bg-surface px-2 py-0.5 font-mono text-[9px] font-medium tracking-wider text-muted uppercase">AUTOPSY REPORT</span>
@@ -569,15 +592,25 @@ function DetailPanel({ specimen, selectedNodeId, onClose, onBlastRadius, onSelec
         </div>
       </div>
 
-      <h2 className="mt-2 truncate font-display text-[16px] font-semibold tracking-tight text-ink">{node?.name ?? 'Specimen detail'}</h2>
+      <div className="mt-1.5 flex items-center justify-between gap-2">
+        <h2 className="truncate font-display text-[15px] font-semibold tracking-tight text-ink">{node?.name ?? 'Specimen detail'}</h2>
+        {node && meta && (
+          <span className={`rounded-full px-2 py-0.5 font-mono text-[9px] font-bold text-white shadow-2xs shrink-0 ${meta.solidBadgeClass}`}>
+            {node.rotScore} ROT · {meta.label}
+          </span>
+        )}
+      </div>
 
-      {node && meta && (
-        <div className="mt-2.5 rounded-xl border border-hairline bg-surface/50 p-2.5">
+      {node && <div className="mt-2.5 flex rounded-xl border border-hairline bg-surface/70 p-0.5" role="tablist"><button type="button" role="tab" aria-selected={tab === 'overview'} onClick={() => setTab('overview')} className={`flex-1 rounded-lg px-3 py-1 text-xs font-medium transition-all ${tab === 'overview' ? 'bg-white text-ink shadow-xs' : 'text-muted hover:text-ink'}`}>Overview</button><button type="button" role="tab" aria-selected={tab === 'source'} onClick={() => setTab('source')} className={`flex-1 rounded-lg px-3 py-1 text-xs font-medium transition-all ${tab === 'source' ? 'bg-white text-ink shadow-xs' : 'text-muted hover:text-ink'}`}>Source Code</button></div>}
+    </header>
+
+    {node ? tab === 'overview' ? <>
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 pb-28 space-y-3.5">
+      {meta && (
+        <div className="rounded-xl border border-hairline bg-surface/50 p-2.5">
           <div className="flex items-center justify-between">
             <span className="font-mono text-[10px] font-medium tracking-wider text-muted uppercase">Code Rot Index</span>
-            <span className={`rounded-full px-2 py-0.5 font-mono text-[9px] font-bold text-white shadow-2xs ${meta.solidBadgeClass}`}>
-              {meta.label}
-            </span>
+            <span className={`font-mono text-[11px] font-bold ${meta.textClass}`}>{meta.label}</span>
           </div>
           <div className="mt-1 flex items-baseline gap-1.5">
             <span className={`font-mono text-2xl font-bold tracking-tight ${meta.textClass}`}>{node.rotScore}</span>
@@ -594,40 +627,84 @@ function DetailPanel({ specimen, selectedNodeId, onClose, onBlastRadius, onSelec
         </div>
       )}
 
-      {node && (
-        <div className="mt-2.5 grid grid-cols-4 divide-x divide-hairline rounded-xl border border-hairline bg-surface/30 p-2 text-center">
-          <div className="px-1">
-            <div className="font-mono text-[9px] text-muted">LINES</div>
-            <div className="font-mono text-xs font-semibold text-ink truncate">{node.linesOfCode}</div>
+      <div className="grid grid-cols-4 divide-x divide-hairline rounded-xl border border-hairline bg-surface/30 p-2 text-center">
+        <div className="px-1">
+          <div className="font-mono text-[9px] text-muted">LINES</div>
+          <div className="font-mono text-xs font-semibold text-ink truncate">{node.linesOfCode}</div>
+        </div>
+        <div className="px-1">
+          <div className="font-mono text-[9px] text-muted">IMPORTS</div>
+          <div className="font-mono text-xs font-semibold text-ink truncate">{imports.length}</div>
+        </div>
+        <div className="px-1">
+          <div className="font-mono text-[9px] text-muted">CALLERS</div>
+          <div className="font-mono text-xs font-semibold text-ink truncate">{importedBy.length}</div>
+        </div>
+        <div className="px-1">
+          <div className="font-mono text-[9px] text-muted">BRANCH</div>
+          <div className="font-mono text-xs font-semibold text-ink truncate" title={node.kind === 'preset' ? node.lastModified : 'Active'}>
+            {node.kind === 'preset' ? node.lastModified : 'Active'}
           </div>
-          <div className="px-1">
-            <div className="font-mono text-[9px] text-muted">IMPORTS</div>
-            <div className="font-mono text-xs font-semibold text-ink truncate">{imports.length}</div>
+        </div>
+      </div>
+
+      <p className="text-[12px] leading-relaxed text-muted">{node.kind === 'ingested' ? node.summary : 'Preset specimen with curated findings and source context.'}</p>
+
+      <section>
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-1.5">
+            <h3 className="font-display text-[13px] font-semibold text-ink">Forensic Findings</h3>
+            <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-surface px-1.5 font-mono text-[9px] font-medium text-muted">{findings.length}</span>
           </div>
-          <div className="px-1">
-            <div className="font-mono text-[9px] text-muted">CALLERS</div>
-            <div className="font-mono text-xs font-semibold text-ink truncate">{importedBy.length}</div>
+          <span className="font-mono text-[10px] text-muted">Click line to jump</span>
+        </div>
+        <ol className="space-y-2">{findings.map((finding) => {
+          const match = /^(?:Lines?\s+(\d+(?:\s*(?:[-–]|to)\s*\d+)?))(?::\s*|\s*-\s*|\s+)(.*)$/i.exec(finding);
+          const lineLabel = match ? `L${match[1]}` : null;
+          const message = match ? match[2] : finding;
+          const isCritical = /empty catch|high cyclomatic|eval|unsafe|vulnerability/i.test(finding);
+          return <li key={finding}><button type="button" onClick={() => jumpToFinding(finding)} className="group flex w-full items-start gap-2.5 rounded-xl border border-hairline bg-surface/30 p-2.5 text-left transition-all hover:border-muted/30 hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">{lineLabel ? <span className="shrink-0 rounded-md border border-hairline bg-white px-1.5 py-0.5 font-mono text-[10px] font-semibold text-ink shadow-2xs group-hover:border-ink/30">{lineLabel}</span> : <span className={`shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-semibold ${isCritical ? 'bg-crimson/10 text-crimson' : 'bg-surface text-muted'}`}>#</span>}<span className="text-[12px] leading-relaxed text-ink group-hover:text-black">{message}</span></button></li>;
+        })}</ol>
+      </section>
+
+      <SurgicalPatch
+        key={node.path}
+        path={node.path}
+        code={code}
+        findings={findings}
+        repositoryUrl={specimen?.kind === 'ingested' ? specimen.repositoryUrl : null}
+        rotScore={node.rotScore}
+        initialPatch={synthesizedPatches[node.path] ?? null}
+        onSynthesized={(patch) => onSavePatch(node.path, patch)}
+      />
+
+      <section className="rounded-xl border border-hairline bg-surface/30 p-3">
+        <h3 className="font-display text-[12px] font-semibold text-ink">Recommended action</h3>
+        <p className="mt-1 text-[12px] leading-relaxed text-muted">{node.kind === 'ingested' ? node.recommendation : 'Review the findings and validate the change with a focused regression test.'}</p>
+      </section>
+
+      <section>
+        <h3 className="font-display text-[12px] font-semibold text-ink mb-2">Dependency graph</h3>
+        <div className="space-y-2.5">
+          <div>
+            <span className="font-mono text-[10px] text-muted uppercase">Depends on ({imports.length})</span>
+            <div className="mt-1 flex flex-wrap gap-1">
+              {imports.length ? imports.map((edge) => <button key={edge.id} type="button" onClick={() => onSelectNode(edge.target)} className="truncate max-w-full rounded-md border border-hairline bg-surface/70 px-2 py-1 font-mono text-[10px] text-muted transition-colors hover:border-ink/20 hover:bg-white hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">→ {specimen?.nodes.find((candidate) => candidate.id === edge.target)?.name ?? edge.target}</button>) : <p className="text-[11px] text-muted italic">No indexed imports</p>}
+            </div>
           </div>
-          <div className="px-1">
-            <div className="font-mono text-[9px] text-muted">BRANCH</div>
-            <div className="font-mono text-xs font-semibold text-ink truncate" title={node.kind === 'preset' ? node.lastModified : 'Active'}>
-              {node.kind === 'preset' ? node.lastModified : 'Active'}
+          <div>
+            <span className="font-mono text-[10px] text-muted uppercase">Imported by ({importedBy.length})</span>
+            <div className="mt-1 flex flex-wrap gap-1">
+              {importedBy.length ? importedBy.map((edge) => <button key={edge.id} type="button" onClick={() => onSelectNode(edge.source)} className="truncate max-w-full rounded-md border border-hairline bg-surface/70 px-2 py-1 font-mono text-[10px] text-muted transition-colors hover:border-ink/20 hover:bg-white hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">← {specimen?.nodes.find((candidate) => candidate.id === edge.source)?.name ?? edge.source}</button>) : <p className="text-[11px] text-muted italic">No indexed callers</p>}
             </div>
           </div>
         </div>
-      )}
-
-      {node && <p className="mt-2.5 text-[12px] leading-relaxed text-muted line-clamp-3">{node.kind === 'ingested' ? node.summary : 'Preset specimen with curated findings and source context.'}</p>}
-
-      {node && <div className="mt-3 flex rounded-xl border border-hairline bg-surface/70 p-1" role="tablist"><button type="button" role="tab" aria-selected={tab === 'overview'} onClick={() => setTab('overview')} className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${tab === 'overview' ? 'bg-white text-ink shadow-xs' : 'text-muted hover:text-ink'}`}>Overview</button><button type="button" role="tab" aria-selected={tab === 'source'} onClick={() => setTab('source')} className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${tab === 'source' ? 'bg-white text-ink shadow-xs' : 'text-muted hover:text-ink'}`}>Source Code</button></div>}
-    </header>
-    {node ? tab === 'overview' ? <div className="flex-1 overflow-y-auto p-4 space-y-4"><section><div className="flex items-center justify-between mb-2"><div className="flex items-center gap-1.5"><h3 className="font-display text-[13px] font-semibold text-ink">Forensic Findings</h3><span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-surface px-1.5 font-mono text-[9px] font-medium text-muted">{findings.length}</span></div><span className="font-mono text-[10px] text-muted">Click line to jump</span></div><ol className="space-y-2">{findings.map((finding) => {
-      const match = /^(?:Lines?\s+(\d+(?:\s*(?:[-–]|to)\s*\d+)?))(?::\s*|\s*-\s*|\s+)(.*)$/i.exec(finding);
-      const lineLabel = match ? `L${match[1]}` : null;
-      const message = match ? match[2] : finding;
-      const isCritical = /empty catch|high cyclomatic|eval|unsafe|vulnerability/i.test(finding);
-      return <li key={finding}><button type="button" onClick={() => jumpToFinding(finding)} className="group flex w-full items-start gap-2.5 rounded-xl border border-hairline bg-surface/30 p-2.5 text-left transition-all hover:border-muted/30 hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">{lineLabel ? <span className="shrink-0 rounded-md border border-hairline bg-white px-1.5 py-0.5 font-mono text-[10px] font-semibold text-ink shadow-2xs group-hover:border-ink/30">{lineLabel}</span> : <span className={`shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-semibold ${isCritical ? 'bg-crimson/10 text-crimson' : 'bg-surface text-muted'}`}>#</span>}<span className="text-[12px] leading-relaxed text-ink group-hover:text-black">{message}</span></button></li>;
-    })}</ol></section><SurgicalPatch key={node.path} path={node.path} code={code} findings={findings} /><section className="rounded-xl border border-hairline bg-surface/30 p-3"><h3 className="font-display text-[12px] font-semibold text-ink">Recommended action</h3><p className="mt-1 text-[12px] leading-relaxed text-muted">{node.kind === 'ingested' ? node.recommendation : 'Review the findings and validate the change with a focused regression test.'}</p></section><section><h3 className="font-display text-[12px] font-semibold text-ink mb-2">Dependency graph</h3><div className="space-y-2.5"><div><span className="font-mono text-[10px] text-muted uppercase">Depends on ({imports.length})</span><div className="mt-1 flex flex-wrap gap-1">{imports.length ? imports.map((edge) => <button key={edge.id} type="button" onClick={() => onSelectNode(edge.target)} className="truncate max-w-full rounded-md border border-hairline bg-surface/70 px-2 py-1 font-mono text-[10px] text-muted transition-colors hover:border-ink/20 hover:bg-white hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">→ {specimen?.nodes.find((candidate) => candidate.id === edge.target)?.name ?? edge.target}</button>) : <p className="text-[11px] text-muted italic">No indexed imports</p>}</div></div><div><span className="font-mono text-[10px] text-muted uppercase">Imported by ({importedBy.length})</span><div className="mt-1 flex flex-wrap gap-1">{importedBy.length ? importedBy.map((edge) => <button key={edge.id} type="button" onClick={() => onSelectNode(edge.source)} className="truncate max-w-full rounded-md border border-hairline bg-surface/70 px-2 py-1 font-mono text-[10px] text-muted transition-colors hover:border-ink/20 hover:bg-white hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">← {specimen?.nodes.find((candidate) => candidate.id === edge.source)?.name ?? edge.source}</button>) : <p className="text-[11px] text-muted italic">No indexed callers</p>}</div></div></div></section><button type="button" onClick={onBlastRadius} className="w-full rounded-xl bg-ink px-3 py-2.5 text-xs font-semibold text-white shadow-xs transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">Analyze downstream blast radius →</button></div> : <div ref={codeRef} className="min-h-0 flex-1 p-3"><CodeBlock code={code} title={node.path} highlightRange={highlightRange} className="h-full" /></div> : <p className="p-5 text-xs text-muted">Select a file node to inspect it.</p>}
+      </section>
+      </div>
+      <div className="shrink-0 border-t border-hairline bg-white/95 p-2.5 backdrop-blur-sm">
+        <button type="button" onClick={onBlastRadius} className="w-full rounded-lg bg-ink px-3 py-2 text-[11px] font-medium text-white shadow-xs transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">Analyze downstream blast radius →</button>
+      </div>
+    </> : <div ref={codeRef} className="min-h-0 flex-1 overflow-hidden p-3"><CodeBlock code={code} title={node.path} highlightRange={highlightRange} className="h-full min-h-0" /></div> : <p className="p-5 text-xs text-muted">Select a file node to inspect it.</p>}
   </aside>;
 }
 function WorkspaceContent() {
@@ -637,6 +714,7 @@ function WorkspaceContent() {
   const [specimen, setSpecimen] = useState<Specimen | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [spotlightNodeIds, setSpotlightNodeIds] = useState<string[]>([]);
+  const [impactOriginId, setImpactOriginId] = useState<string | null>(null);
   const [isolateHotspots, setIsolateHotspots] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [minRot, setMinRot] = useState(0);
@@ -648,6 +726,28 @@ function WorkspaceContent() {
     { status: 'idle' | 'loading' | 'success'; repository?: string; partial?: boolean; showingSample?: boolean; isSlow?: boolean } | IngestErrorState
   >({ status: 'idle' });
   const [retryNonce, setRetryNonce] = useState(0);
+  const [synthesizedPatches, setSynthesizedPatches] = useState<Record<string, CachedPatch>>(() => {
+    if (typeof window === 'undefined') return {};
+    try {
+      const stored = window.sessionStorage.getItem('necro_synthesized_patches');
+      return stored ? (JSON.parse(stored) as Record<string, CachedPatch>) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const handleSavePatch = (path: string, patch: CachedPatch) => {
+    setSynthesizedPatches((prev) => {
+      const updated = { ...prev, [path]: patch };
+      try {
+        window.sessionStorage.setItem('necro_synthesized_patches', JSON.stringify(updated));
+      } catch {
+        // ignore storage quota issues
+      }
+      return updated;
+    });
+  };
+
   const activeControllerRef = useRef<AbortController | null>(null);
   const lifecycleHeadingRef = useRef<HTMLHeadingElement>(null);
 
@@ -667,6 +767,7 @@ function WorkspaceContent() {
     setSource({ repo, specimenId });
     setSelectedNodeId(null);
     setSpotlightNodeIds([]);
+    setImpactOriginId(null);
     setIsolateHotspots(false);
     setCamera({ x: 0, y: 20, scale: 0.92 });
     if (specimenId || !normalizedRepository) {
@@ -765,11 +866,13 @@ function WorkspaceContent() {
   const selectNode = (nodeId: string | null) => {
     if (nodeId === null) {
       setSpotlightNodeIds([]);
+      setImpactOriginId(null);
       setSelectedNodeId(null);
       return;
     }
     if ((specimen?.nodes ?? []).some((node) => node.id === nodeId)) {
       setSpotlightNodeIds([]);
+      setImpactOriginId(null);
       setSelectedNodeId(nodeId);
     }
   };
@@ -789,6 +892,11 @@ function WorkspaceContent() {
     const blob = new Blob([report], { type: format === 'json' ? 'application/json' : 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a'); link.href = url; link.download = `${specimen.title.replace(/[^a-z0-9]+/gi, '-')}.${format === 'json' ? 'json' : 'md'}`; link.click(); URL.revokeObjectURL(url);
+    toast.add({
+      type: 'success',
+      title: 'Report exported',
+      description: `Downloaded ${format.toUpperCase()} autopsy brief.`,
+    });
   };
 
   const loadPreviousAudit = () => {
@@ -798,10 +906,27 @@ function WorkspaceContent() {
   };
   const analyzeBlastRadius = () => {
     if (!specimen || !selectedNodeId) return;
+    const currentNode = specimen.nodes.find((candidate) => candidate.id === selectedNodeId);
     const ids = new Set<string>([selectedNodeId]);
     let changed = true;
     while (changed) { changed = false; specimen.edges.forEach((edge) => { if (ids.has(edge.source) && !ids.has(edge.target)) { ids.add(edge.target); changed = true; } }); }
     setSpotlightNodeIds([...ids]);
+    setImpactOriginId(selectedNodeId);
+
+    const downstreamCount = ids.size - 1;
+    if (downstreamCount === 0) {
+      toast.add({
+        type: 'info',
+        title: 'No downstream blast radius',
+        description: `"${currentNode?.name ?? 'This file'}" has no downstream consumers. Changes here will not cascade to other indexed files.`,
+      });
+    } else {
+      toast.add({
+        type: 'success',
+        title: 'Blast radius mapped',
+        description: `Identified ${downstreamCount} downstream ${downstreamCount === 1 ? 'file' : 'files'} in the dependency blast radius.`,
+      });
+    }
   };
 
   const animateCamera = (next: { x: number; y: number; scale: number }) => setCamera(next);
@@ -812,6 +937,7 @@ function WorkspaceContent() {
 
   const handleSpotlight = ({ nodeIds, selectedNodeId: responseSelection }: SpotlightState) => {
     setSpotlightNodeIds(nodeIds);
+    setImpactOriginId(responseSelection ?? selectedNodeId);
     if (responseSelection) setSelectedNodeId(responseSelection);
     const selected = (specimen?.nodes ?? []).filter((node) => nodeIds.includes(node.id));
     if (selected.length === 0) return;
@@ -1018,16 +1144,28 @@ function WorkspaceContent() {
             <GraphViewport
               specimen={specimen}
               selectedNodeId={selectedNodeId}
+              impactOriginId={impactOriginId}
               spotlightNodeIds={spotlightNodeIds}
               camera={camera}
               visibleNodeIds={visibleNodeIds}
               onCameraChange={setCamera}
               onSelectNode={selectNode}
               isolateHotspots={isolateHotspots}
+              synthesizedPatches={synthesizedPatches}
             />
             {specimen && <SeanceConsole specimen={specimen} selectedNodeId={selectedNodeId} onSpotlight={handleSpotlight} />}
           </div>
-          {selectedNodeId && <DetailPanel specimen={specimen} selectedNodeId={selectedNodeId} onBlastRadius={analyzeBlastRadius} onSelectNode={selectNode} onClose={() => setSelectedNodeId(null)} />}
+          {selectedNodeId && (
+            <DetailPanel
+              specimen={specimen}
+              selectedNodeId={selectedNodeId}
+              onBlastRadius={analyzeBlastRadius}
+              onSelectNode={selectNode}
+              onClose={() => setSelectedNodeId(null)}
+              synthesizedPatches={synthesizedPatches}
+              onSavePatch={handleSavePatch}
+            />
+          )}
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto"><PresetChoices /></div>

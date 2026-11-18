@@ -31,7 +31,7 @@ export function CodeBlock({ code, title, highlightRange, startLine = 1, classNam
           {copied ? <Check size={13} /> : <Copy size={13} />}
         </button>
       </div>
-      <pre tabIndex={0} className="flex-1 overflow-auto py-2 font-mono text-[11px] leading-5" dir="ltr">
+      <pre tabIndex={0} className="min-h-0 flex-1 overflow-auto overscroll-contain py-2 font-mono text-[11px] leading-5" dir="ltr">
         <code>{lines.map((line, index) => {
           const lineNumber = startLine + index;
           const isHighlighted = Boolean(highlightRange && lineNumber >= highlightRange.start && lineNumber <= highlightRange.end);
