@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { Sparkles } from 'lucide-react';
 import { diffHunks, diffLines, unifiedDiff } from '@/lib/diff';
 
 type PatchState =
@@ -50,17 +51,24 @@ export function SurgicalPatch({ path, code, findings }: { path: string; code: st
   const buttonClass = 'rounded-full border border-hairline bg-white px-3 py-1 text-[10px] text-muted hover:bg-surface hover:text-ink disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent';
 
   return (
-    <section aria-labelledby="surgical-patch-title" className="mt-4 rounded-lg border border-skyAccent/20 bg-skyAccent/5 p-3">
+    <section aria-labelledby="surgical-patch-title" className="rounded-xl border border-hairline bg-surface/50 p-3.5">
       <div className="flex items-center justify-between gap-2">
-        <h3 id="surgical-patch-title" className="font-display text-[13px] font-medium">Surgical patch</h3>
+        <div className="flex items-center gap-1.5">
+          <Sparkles size={14} className="text-ink" />
+          <h3 id="surgical-patch-title" className="font-display text-[13px] font-semibold text-ink">Surgical patch</h3>
+        </div>
         {state.status === 'ready' && hunks.length > 0 && (
           <span className="font-mono text-[10px]"><span className="text-emerald">+{added}</span> <span className="text-crimson">−{removed}</span></span>
         )}
       </div>
+      <p className="mt-1 text-[11px] leading-normal text-muted">
+        Synthesizes a targeted AI diff patch to refactor high-rot hotspots.
+      </p>
 
       {state.status === 'idle' && (
-        <button type="button" onClick={synthesize} className="mt-2 w-full rounded-lg bg-ink px-3 py-2 text-xs font-medium text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">
-          Synthesize Surgical Patch
+        <button type="button" onClick={synthesize} className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-ink px-3 py-2 text-xs font-medium text-white shadow-xs transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">
+          <Sparkles size={13} className="text-white/80" />
+          <span>Synthesize Surgical Patch</span>
         </button>
       )}
       {state.status === 'loading' && <p role="status" className="mt-2 text-[13px] text-muted">Synthesizing a minimal patch…</p>}

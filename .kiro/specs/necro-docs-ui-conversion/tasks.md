@@ -155,14 +155,14 @@ The implementation uses TypeScript and the existing dependencies only. Tasks are
     - Verify landmarks, headings, native controls, focus rings, text contrast decisions, `aria-hidden` decorations, no badges/dots, no inline scripts/string handlers, no CDN references, and no forbidden file modifications.
     - Verify the prototype remains unchanged and client code contains no credentials.
     - _Requirements: 1.2, 4.1–4.6, 5.9, 14.1–14.11, 15.1–15.3, 15.6_
-  - [-] 7.3 Run the focused conversion test suite and the existing ingest test suite; fix regressions without changing the frozen ingest implementation.
+  - [ ] 7.3 Run the focused conversion test suite and the existing ingest test suite; fix regressions without changing the frozen ingest implementation.
     - Confirm all conversion unit/component tests pass and `src/lib/ingest/__tests__/` remains green at its pre-conversion state.
     - _Requirements: 15.4–15.5, 15.7–15.9_
   - [ ]* 7.4 Run lint and production build, then resolve all TypeScript and ESLint errors in files changed by this spec.
     - Use the repository's existing `npm run lint`, `npm run build`, and `npm test` commands; do not start a watch server as part of the task.
     - _Requirements: 15.4–15.5_
 
-- [~] 8. Checkpoint - Ensure all tests pass, lint is clean, the production build succeeds, and ask the user if questions arise.
+- [ ] 8. Checkpoint - Ensure all tests pass, lint is clean, the production build succeeds, and ask the user if questions arise.
 
 ## Notes
 

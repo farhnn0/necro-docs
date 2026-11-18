@@ -6,7 +6,13 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { CodeBlock } from '@/components/ui/code-block';
 import { Input } from '@/components/ui/input';
-import { ChevronLeft, Download, FileText, GitCompare, GripVertical, Maximize2, Mic, RotateCcw, Search, Volume2, ZoomIn, ZoomOut } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { ChevronDown, ChevronLeft, Code, Download, FileText, Flame, GitCompare, GripVertical, Maximize2, Mic, Minimize2, RotateCcw, Search, Volume2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import {
   DndContext,
   useDraggable,
@@ -32,7 +38,7 @@ import {
   isPresetId,
   PRESET_IDS,
 } from '@/lib/conversion/specimens';
-import type { IngestedWorkspaceNode, IngestErrorState, PresetId, Specimen, SpotlightState, WorkspaceNode } from '@/lib/conversion/types';
+import type { IngestErrorState, PresetId, Specimen, SpotlightState, WorkspaceNode } from '@/lib/conversion/types';
 import type { RepoAnalysis } from '@/lib/repoAnalyzer';
 import type { ApiResponse } from '@/lib/types';
 import SeanceConsole from './SeanceConsole';
@@ -346,7 +352,7 @@ function GraphViewport({
         data-camera-x={camera.x}
         data-camera-y={camera.y}
         data-camera-scale={camera.scale}
-        className="paper-grid relative min-h-0 flex-1 select-none touch-none cursor-grab overflow-hidden active:cursor-grabbing"
+        className="paper-grid relative h-full min-h-0 w-full flex-1 select-none touch-none cursor-grab overflow-hidden active:cursor-grabbing"
       >
         {specimen ? (
           <div className="absolute left-1/2 top-1/2 h-[1600px] w-[1200px] motion-reduce:transition-none" style={{ willChange: 'transform', transform: `translate(-50%, -50%) translate3d(${camera.x + offset.x}px, ${camera.y + offset.y}px, 0) scale(${camera.scale})` }}>
@@ -534,39 +540,94 @@ function DetailPanel({ specimen, selectedNodeId, onClose, onBlastRadius, onSelec
 
 
 
-  return <aside aria-label="Specimen detail panel" className={`${expanded ? 'w-[640px]' : 'w-[420px]'} z-30 flex h-full shrink-0 flex-col border-l border-hairline bg-white transition-all duration-200 max-sm:fixed max-sm:inset-x-0 max-sm:bottom-0 max-sm:h-[78vh] max-sm:w-full max-sm:border-l-0 max-sm:border-t`}>
+  return <aside aria-label="Specimen detail panel" className={`absolute right-4 top-20 z-20 flex max-h-[calc(100vh-6rem)] ${expanded ? 'w-[540px]' : 'w-[380px]'} flex-col overflow-hidden rounded-[24px] border border-[#E8E9ED] bg-white/95 shadow-[0_20px_50px_-12px_rgba(17,17,19,0.12)] backdrop-blur-md transition-all duration-200 max-sm:left-4 max-sm:right-4 max-sm:w-auto`}>
     <header className="shrink-0 border-b border-hairline p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="mb-2 flex items-center gap-2">
-            <span className="rounded-full bg-surface px-2 py-0.5 font-mono text-[9px] text-muted">AUTOPSY REPORT</span>
-            {meta && (
-              <span className={`rounded-full px-2 py-0.5 font-mono text-[9px] font-semibold text-white shadow-xs ${meta.solidBadgeClass}`}>
-                {meta.label}
-              </span>
-            )}
-          </div>
-          <p className="truncate font-mono text-[10px] text-muted" title={node?.path}>{node?.path ?? 'Select a file node'}</p>
-          <h2 className="mt-1 truncate font-display text-[15px] font-medium">{node?.name ?? 'Specimen detail'}</h2>
-          {node && meta && (
-            <p className="mt-1 font-mono text-[12px] font-semibold">
-              <span className={meta.textClass}>{node.rotScore}</span>
-              <span className="ml-1 text-[10px] font-normal text-muted">/ 100 rot  · {meta.label}</span>
-            </p>
-          )}
-          {node && <p className="mt-2 text-[13px] leading-[1.45] font-normal text-muted">{node.kind === 'ingested' ? node.summary : 'Preset specimen with curated findings and source context.'}</p>}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="rounded-md bg-surface px-2 py-0.5 font-mono text-[9px] font-medium tracking-wider text-muted uppercase">AUTOPSY REPORT</span>
+          <span className="truncate font-mono text-[10px] text-muted" title={node?.path}>{node?.path ?? 'Select a file node'}</span>
         </div>
-        <div className="flex shrink-0 gap-1.5"><button type="button" onClick={() => setExpanded((value) => !value)} aria-label={expanded ? 'Compact sidebar' : 'Expand sidebar'} className="rounded-full border border-hairline px-2.5 py-1 text-[12px] font-normal text-muted hover:bg-surface">{expanded ? 'Compact' : 'Expand'}</button><button type="button" onClick={onClose} aria-label="Close specimen detail" className="rounded-full border border-hairline px-2.5 py-1 text-[12px] font-normal text-muted hover:bg-surface">Close</button></div>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            aria-label={expanded ? 'Compact sidebar' : 'Expand sidebar'}
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-hairline text-muted transition-colors hover:bg-surface hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent"
+            title={expanded ? 'Compact view' : 'Expand view'}
+          >
+            {expanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close specimen detail"
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-hairline text-muted transition-colors hover:bg-surface hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent"
+            title="Close inspector"
+          >
+            <X size={14} />
+          </button>
+        </div>
       </div>
-      {node && <div className="mt-4 flex rounded-lg bg-surface p-1" role="tablist"><button type="button" role="tab" aria-selected={tab === 'overview'} onClick={() => setTab('overview')} className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium ${tab === 'overview' ? 'bg-white text-ink shadow-sm' : 'text-muted'}`}>Overview</button><button type="button" role="tab" aria-selected={tab === 'source'} onClick={() => setTab('source')} className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium ${tab === 'source' ? 'bg-white text-ink shadow-sm' : 'text-muted'}`}>Source Code</button></div>}
+
+      <h2 className="mt-2 truncate font-display text-[16px] font-semibold tracking-tight text-ink">{node?.name ?? 'Specimen detail'}</h2>
+
+      {node && meta && (
+        <div className="mt-2.5 rounded-xl border border-hairline bg-surface/50 p-2.5">
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-[10px] font-medium tracking-wider text-muted uppercase">Code Rot Index</span>
+            <span className={`rounded-full px-2 py-0.5 font-mono text-[9px] font-bold text-white shadow-2xs ${meta.solidBadgeClass}`}>
+              {meta.label}
+            </span>
+          </div>
+          <div className="mt-1 flex items-baseline gap-1.5">
+            <span className={`font-mono text-2xl font-bold tracking-tight ${meta.textClass}`}>{node.rotScore}</span>
+            <span className="font-mono text-xs text-muted">/ 100</span>
+          </div>
+          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-hairline">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${
+                meta.tier === 'crimson' ? 'bg-crimson' : meta.tier === 'amber' ? 'bg-amber' : 'bg-emerald'
+              }`}
+              style={{ width: `${Math.max(4, Math.min(100, node.rotScore))}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {node && (
+        <div className="mt-2.5 grid grid-cols-4 divide-x divide-hairline rounded-xl border border-hairline bg-surface/30 p-2 text-center">
+          <div className="px-1">
+            <div className="font-mono text-[9px] text-muted">LINES</div>
+            <div className="font-mono text-xs font-semibold text-ink truncate">{node.linesOfCode}</div>
+          </div>
+          <div className="px-1">
+            <div className="font-mono text-[9px] text-muted">IMPORTS</div>
+            <div className="font-mono text-xs font-semibold text-ink truncate">{imports.length}</div>
+          </div>
+          <div className="px-1">
+            <div className="font-mono text-[9px] text-muted">CALLERS</div>
+            <div className="font-mono text-xs font-semibold text-ink truncate">{importedBy.length}</div>
+          </div>
+          <div className="px-1">
+            <div className="font-mono text-[9px] text-muted">BRANCH</div>
+            <div className="font-mono text-xs font-semibold text-ink truncate" title={node.kind === 'preset' ? node.lastModified : 'Active'}>
+              {node.kind === 'preset' ? node.lastModified : 'Active'}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {node && <p className="mt-2.5 text-[12px] leading-relaxed text-muted line-clamp-3">{node.kind === 'ingested' ? node.summary : 'Preset specimen with curated findings and source context.'}</p>}
+
+      {node && <div className="mt-3 flex rounded-xl border border-hairline bg-surface/70 p-1" role="tablist"><button type="button" role="tab" aria-selected={tab === 'overview'} onClick={() => setTab('overview')} className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${tab === 'overview' ? 'bg-white text-ink shadow-xs' : 'text-muted hover:text-ink'}`}>Overview</button><button type="button" role="tab" aria-selected={tab === 'source'} onClick={() => setTab('source')} className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${tab === 'source' ? 'bg-white text-ink shadow-xs' : 'text-muted hover:text-ink'}`}>Source Code</button></div>}
     </header>
-    {node ? tab === 'overview' ? <div className="flex-1 overflow-y-auto p-4"><section><div className="flex items-center justify-between"><h3 className="font-display text-[13px] font-medium">Findings</h3><span className="font-mono text-[10px] text-muted">Click to jump to line</span></div><ol className="mt-3 space-y-2">{findings.map((finding, index) => {
-      const isLine = /Lines?\s+\d+/i.test(finding);
-      const isCritical = /empty catch|high cyclomatic|eval|unsafe/i.test(finding);
-      const isPositive = /no high-severity|healthy|clean|positive/i.test(finding);
-      const badgeClass = isPositive ? 'bg-emerald text-white' : isCritical ? 'bg-crimson/15 text-crimson font-bold' : isLine ? 'bg-amber/20 text-amber font-semibold' : 'bg-surface text-ink';
-      return <li key={finding}><button type="button" onClick={() => jumpToFinding(finding)} className="flex w-full gap-2.5 rounded-lg p-2 text-left text-[13px] leading-relaxed text-muted hover:bg-surface transition-colors"><span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full font-mono text-[10px] ${badgeClass}`}>{String(index + 1).padStart(2, '0')}</span><span className="text-ink">{finding}</span></button></li>;
-    })}</ol></section><section className="mt-6"><h3 className="font-display text-[13px] font-medium">Module telemetry</h3><dl className="mt-3 grid grid-cols-2 gap-2">{[['Lines', String(node.linesOfCode)], ['Imports', String(imports.length)], ['Imported by', String(importedBy.length)], [node.kind === 'preset' ? 'Last modified' : 'Last commit', node.kind === 'preset' ? node.lastModified : node.lastCommit]].map(([label, value]) => <div key={label} className="rounded-lg bg-surface p-2.5"><dt className="font-mono text-[10px] text-muted">{label}</dt><dd className="mt-1 truncate font-mono text-xs font-medium text-ink">{value}</dd></div>)}</dl></section><SurgicalPatch key={node.path} path={node.path} code={code} findings={findings} /><section className="mt-6"><h3 className="font-display text-[13px] font-medium">Recommended action</h3><p className="mt-1.5 text-[13px] leading-[1.45] text-muted">{node.kind === 'ingested' ? node.recommendation : 'Review the findings and validate the change with a focused regression test.'}</p></section><section className="mt-6"><h3 className="font-display text-[13px] font-medium">Imports</h3><div className="mt-2 space-y-1">{imports.length ? imports.map((edge) => <button key={edge.id} type="button" onClick={() => onSelectNode(edge.target)} className="block w-full truncate rounded px-2 py-1.5 text-left font-mono text-[10px] text-muted hover:bg-surface hover:text-ink">→ {specimen?.nodes.find((candidate) => candidate.id === edge.target)?.name ?? edge.target}</button>) : <p className="text-xs text-muted">No indexed imports.</p>}</div><h3 className="mt-4 font-display text-[13px] font-medium">Imported by</h3><div className="mt-2 space-y-1">{importedBy.length ? importedBy.map((edge) => <button key={edge.id} type="button" onClick={() => onSelectNode(edge.source)} className="block w-full truncate rounded px-2 py-1.5 text-left font-mono text-[10px] text-muted hover:bg-surface hover:text-ink">← {specimen?.nodes.find((candidate) => candidate.id === edge.source)?.name ?? edge.source}</button>) : <p className="text-xs text-muted">No indexed dependents.</p>}</div></section><button type="button" onClick={onBlastRadius} className="mt-6 w-full rounded-xl bg-ink px-3 py-2.5 text-xs font-medium text-white hover:opacity-90">Analyze downstream blast radius →</button></div> : <div ref={codeRef} className="min-h-0 flex-1 p-3"><CodeBlock code={code} title={node.path} highlightRange={highlightRange} className="h-full" /></div> : <p className="p-5 text-xs text-muted">Select a file node to inspect it.</p>}
+    {node ? tab === 'overview' ? <div className="flex-1 overflow-y-auto p-4 space-y-4"><section><div className="flex items-center justify-between mb-2"><div className="flex items-center gap-1.5"><h3 className="font-display text-[13px] font-semibold text-ink">Forensic Findings</h3><span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-surface px-1.5 font-mono text-[9px] font-medium text-muted">{findings.length}</span></div><span className="font-mono text-[10px] text-muted">Click line to jump</span></div><ol className="space-y-2">{findings.map((finding) => {
+      const match = /^(?:Lines?\s+(\d+(?:\s*(?:[-–]|to)\s*\d+)?))(?::\s*|\s*-\s*|\s+)(.*)$/i.exec(finding);
+      const lineLabel = match ? `L${match[1]}` : null;
+      const message = match ? match[2] : finding;
+      const isCritical = /empty catch|high cyclomatic|eval|unsafe|vulnerability/i.test(finding);
+      return <li key={finding}><button type="button" onClick={() => jumpToFinding(finding)} className="group flex w-full items-start gap-2.5 rounded-xl border border-hairline bg-surface/30 p-2.5 text-left transition-all hover:border-muted/30 hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">{lineLabel ? <span className="shrink-0 rounded-md border border-hairline bg-white px-1.5 py-0.5 font-mono text-[10px] font-semibold text-ink shadow-2xs group-hover:border-ink/30">{lineLabel}</span> : <span className={`shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-semibold ${isCritical ? 'bg-crimson/10 text-crimson' : 'bg-surface text-muted'}`}>#</span>}<span className="text-[12px] leading-relaxed text-ink group-hover:text-black">{message}</span></button></li>;
+    })}</ol></section><SurgicalPatch key={node.path} path={node.path} code={code} findings={findings} /><section className="rounded-xl border border-hairline bg-surface/30 p-3"><h3 className="font-display text-[12px] font-semibold text-ink">Recommended action</h3><p className="mt-1 text-[12px] leading-relaxed text-muted">{node.kind === 'ingested' ? node.recommendation : 'Review the findings and validate the change with a focused regression test.'}</p></section><section><h3 className="font-display text-[12px] font-semibold text-ink mb-2">Dependency graph</h3><div className="space-y-2.5"><div><span className="font-mono text-[10px] text-muted uppercase">Depends on ({imports.length})</span><div className="mt-1 flex flex-wrap gap-1">{imports.length ? imports.map((edge) => <button key={edge.id} type="button" onClick={() => onSelectNode(edge.target)} className="truncate max-w-full rounded-md border border-hairline bg-surface/70 px-2 py-1 font-mono text-[10px] text-muted transition-colors hover:border-ink/20 hover:bg-white hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">→ {specimen?.nodes.find((candidate) => candidate.id === edge.target)?.name ?? edge.target}</button>) : <p className="text-[11px] text-muted italic">No indexed imports</p>}</div></div><div><span className="font-mono text-[10px] text-muted uppercase">Imported by ({importedBy.length})</span><div className="mt-1 flex flex-wrap gap-1">{importedBy.length ? importedBy.map((edge) => <button key={edge.id} type="button" onClick={() => onSelectNode(edge.source)} className="truncate max-w-full rounded-md border border-hairline bg-surface/70 px-2 py-1 font-mono text-[10px] text-muted transition-colors hover:border-ink/20 hover:bg-white hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">← {specimen?.nodes.find((candidate) => candidate.id === edge.source)?.name ?? edge.source}</button>) : <p className="text-[11px] text-muted italic">No indexed callers</p>}</div></div></div></section><button type="button" onClick={onBlastRadius} className="w-full rounded-xl bg-ink px-3 py-2.5 text-xs font-semibold text-white shadow-xs transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">Analyze downstream blast radius →</button></div> : <div ref={codeRef} className="min-h-0 flex-1 p-3"><CodeBlock code={code} title={node.path} highlightRange={highlightRange} className="h-full" /></div> : <p className="p-5 text-xs text-muted">Select a file node to inspect it.</p>}
   </aside>;
 }
 function WorkspaceContent() {
@@ -616,9 +677,9 @@ function WorkspaceContent() {
 
     const showAnalysis = (analysis: RepoAnalysis) => {
       const analyzed = convertRepoAnalysis(analysis);
-      const hotspot = analyzed.nodes.reduce<IngestedWorkspaceNode | null>((top, candidate) => top === null || candidate.rotScore > top.rotScore ? candidate : top, null);
       setSpecimen(analyzed);
-      setSelectedNodeId(hotspot?.id ?? null);
+      // Jangan buka Autopsy Report otomatis setelah analyze. Inspector muncul setelah node diklik.
+      setSelectedNodeId(null);
       setRequestState({ status: 'success', repository: analysis.title });
       const snapshot = { repository: analysis.title, branch: analysis.defaultBranch, files: analyzed.nodes.length, averageRot: analysis.overallRot, savedAt: Date.now() };
       try {
@@ -765,46 +826,175 @@ function WorkspaceContent() {
   const summary = specimen?.summary;
 
   return (
-    <main className="flex h-screen w-screen flex-col overflow-hidden bg-canvas font-sans text-ink">
+    <main className="relative flex h-screen w-screen flex-col overflow-hidden bg-canvas font-sans text-ink">
       <h1 ref={lifecycleHeadingRef} tabIndex={-1} className="sr-only">Necro-Docs workspace</h1>
-      <header className="z-20 flex h-12 shrink-0 items-center justify-between border-b border-hairline bg-white px-5">
-        <div className="flex min-w-0 items-center gap-4">
-          <Link href="/" className="flex shrink-0 items-center gap-1.5 text-xs font-normal text-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">
-            <ChevronLeft size={16} aria-hidden="true" />
+      <header className="z-20 flex h-13 shrink-0 items-center justify-between border-b border-hairline bg-white/95 px-4 backdrop-blur-md">
+        <div className="flex min-w-0 items-center gap-3">
+          <Link href="/" className="flex shrink-0 items-center gap-1 rounded-lg border border-hairline px-2 py-1 text-xs font-medium text-muted transition hover:bg-surface hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">
+            <ChevronLeft size={14} aria-hidden="true" />
             <span>Back</span>
           </Link>
           <span aria-hidden="true" className="h-4 w-px bg-hairline" />
-          <span className="truncate font-mono text-[12px] font-medium" title={title}>{title}</span>
+          <span className="truncate font-mono text-[13px] font-semibold text-ink" title={title}>{title}</span>
+          {summary && <span className="hidden font-mono text-[10px] text-muted rounded-full bg-surface px-2.5 py-0.5 sm:inline">{summary}</span>}
+          {requestState.status === 'success' && requestState.showingSample && <span className="hidden font-mono text-[10px] text-amber rounded-full bg-amber/10 px-2.5 py-0.5 sm:inline">Sample Data</span>}
         </div>
-        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-          {summary && <span className="hidden font-mono text-[10px] text-muted sm:inline">{summary}</span>}
-                    {requestState.status === 'success' && requestState.showingSample && <span className="hidden font-mono text-[10px] text-muted sm:inline">Showing sample data</span>}
-          <button type="button" aria-pressed={isolateHotspots} title="Dim files with rot score below 70" onClick={() => setIsolateHotspots((value) => !value)} className={`rounded-full border px-2.5 py-1 text-[12px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent ${isolateHotspots ? 'border-ink bg-ink text-white' : 'border-hairline text-ink hover:bg-surface'}`}>
-            Focus hotspots
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={loadPreviousAudit}
+            className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent ${
+              showComparison ? 'border-ink bg-ink text-white shadow-xs' : 'border-hairline text-muted hover:bg-surface hover:text-ink'
+            }`}
+            title="Compare current audit with previous snapshot"
+          >
+            <GitCompare size={13} />
+            <span className="hidden sm:inline">Compare</span>
           </button>
-          <button type="button" onClick={() => setBriefOpen(true)} className="flex items-center gap-1.5 rounded-full border border-hairline px-2.5 py-1 text-[12px] font-normal text-muted hover:bg-surface" aria-label="Open repository brief"><FileText size={13} />Repo Brief</button>
-          <button type="button" aria-label="Reset graph view" onClick={() => animateCamera({ x: 0, y: 20, scale: 0.92 })} className="flex items-center gap-1.5 rounded-full border border-hairline px-2 py-0.5 text-[12px] font-normal text-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">
-            <RotateCcw size={13} aria-hidden="true" />
-            <span>Reset view</span>
+          <button
+            type="button"
+            onClick={() => setBriefOpen(true)}
+            className="flex items-center gap-1.5 rounded-xl border border-hairline bg-white px-3 py-1.5 text-xs font-medium text-ink shadow-2xs transition hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent"
+            aria-label="Open repository brief"
+          >
+            <FileText size={13} className="text-muted" />
+            <span>Repo Brief</span>
           </button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="flex items-center gap-1.5 rounded-xl border border-hairline bg-white px-3 py-1.5 text-xs font-medium text-ink shadow-2xs transition hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent"
+              >
+                <Download size={13} className="text-muted" />
+                <span>Export</span>
+                <ChevronDown size={12} className="text-muted" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52 rounded-xl p-1 shadow-lg border-hairline bg-white">
+              <DropdownMenuItem onClick={() => exportReport('md')} className="cursor-pointer gap-2 rounded-lg px-2.5 py-2 text-xs text-ink hover:bg-surface">
+                <FileText size={14} className="text-muted" />
+                <div className="flex flex-col">
+                  <span className="font-medium">Markdown Report</span>
+                  <span className="text-[10px] text-muted">Executive autopsy (.md)</span>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => exportReport('json')} className="cursor-pointer gap-2 rounded-lg px-2.5 py-2 text-xs text-ink hover:bg-surface">
+                <Code size={14} className="text-muted" />
+                <div className="flex flex-col">
+                  <span className="font-medium">JSON Graph Data</span>
+                  <span className="text-[10px] text-muted">Nodes & edges schema (.json)</span>
+                </div>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
 
-      {specimen && <div className="z-10 flex flex-wrap items-center gap-2 border-b border-hairline bg-white px-4 py-1.5">
-        <div className="relative min-w-[200px] flex-1"><Search size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" /><Input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search files..." aria-label="Search files" className="h-9 rounded-full pl-8 text-[13px] md:text-[13px]" /></div>
-        <label className="flex items-center gap-2 font-mono text-[10px] text-muted">Min rot <input type="range" min="0" max="100" value={minRot} onChange={(event) => setMinRot(Number(event.target.value))} className="w-20" /><span>{minRot}</span></label>
-        <div className="hidden lg:flex items-center gap-3 font-mono text-[10px] text-muted border-l border-hairline pl-3">
-          <span className="flex items-center gap-1.5"><span className="rounded-full bg-emerald px-2 py-0.5 text-[9px] font-semibold text-white">Green</span> Healthy (&lt;40)</span>
-          <span className="flex items-center gap-1.5"><span className="rounded-full bg-amber px-2 py-0.5 text-[9px] font-semibold text-white">Orange</span> Warning (40–69)</span>
-          <span className="flex items-center gap-1.5"><span className="rounded-full bg-crimson px-2 py-0.5 text-[9px] font-semibold text-white">Red</span> Critical (≥70)</span>
+      {showComparison && specimen && (
+        <div className="z-20 flex shrink-0 items-center justify-between border-b border-hairline bg-surface/90 px-4 py-2 text-xs text-muted backdrop-blur-sm">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-mono text-[10px] font-semibold text-ink bg-white border border-hairline px-2 py-0.5 rounded-md">
+              AUDIT COMPARISON
+            </span>
+            <span>Current: <strong className="text-ink">{specimen.nodes.length} files, {Math.round(specimen.nodes.reduce((sum, node) => sum + node.rotScore, 0) / Math.max(1, specimen.nodes.length))} rot</strong></span>
+            <span className="text-muted/50">·</span>
+            <span>{previousAudit ? <>Previous: <strong className="text-ink">{previousAudit.files} files, {previousAudit.averageRot} rot</strong></> : 'No previous snapshot recorded yet for this repository.'}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowComparison(false)}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-muted transition hover:bg-white hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink"
+            aria-label="Close comparison"
+            title="Close comparison"
+          >
+            <X size={13} />
+          </button>
         </div>
-        <button type="button" onClick={() => animateCamera({ ...camera, scale: Math.min(1.5, camera.scale + 0.1) })} className="rounded-full border border-hairline p-2" aria-label="Zoom in"><ZoomIn size={14} /></button><button type="button" onClick={() => animateCamera({ ...camera, scale: Math.max(0.35, camera.scale - 0.1) })} className="rounded-full border border-hairline p-2" aria-label="Zoom out"><ZoomOut size={14} /></button>
-        <button type="button" onClick={() => animateCamera({ x: 0, y: 20, scale: 0.92 })} className="rounded-full border border-hairline p-2" aria-label="Fit graph"><Maximize2 size={14} /></button>
-        <button type="button" onClick={() => exportReport('md')} className="flex items-center gap-1 rounded-full border border-hairline px-2 py-0.5 text-[12px] font-normal"><Download size={13} />Export MD</button><button type="button" onClick={() => exportReport('json')} className="rounded-full border border-hairline px-2 py-0.5 text-[12px] font-normal">JSON</button>
-        <button type="button" onClick={loadPreviousAudit} className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[12px] font-normal ${showComparison ? 'border-ink bg-ink text-white' : 'border-hairline'}`}><GitCompare size={13} />Compare</button>
+      )}
+
+      {specimen && <div className={`absolute left-1/2 z-30 flex -translate-x-1/2 items-center gap-2.5 rounded-2xl border border-hairline bg-white/95 px-3 py-1.5 shadow-[0_12px_32px_-4px_rgba(17,17,19,0.10)] backdrop-blur-md transition-all duration-200 max-w-[95vw] ${
+        showComparison ? 'top-26 sm:top-[104px]' : 'top-16'
+      }`}>
+        <div className="relative w-40 sm:w-56">
+          <Search size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+          <Input
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search files..."
+            aria-label="Search files"
+            className="h-8 rounded-xl border-hairline bg-surface/50 pl-8 text-xs placeholder:text-muted/60 focus-visible:ring-1 focus-visible:ring-ink"
+          />
+        </div>
+        <span aria-hidden="true" className="h-4 w-px bg-hairline" />
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            aria-pressed={isolateHotspots}
+            title="Focus files with rot score ≥ 70"
+            onClick={() => setIsolateHotspots((value) => !value)}
+            className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent ${
+              isolateHotspots ? 'bg-crimson text-white shadow-2xs' : 'border border-hairline bg-white text-ink hover:bg-surface'
+            }`}
+          >
+            <Flame size={13} className={isolateHotspots ? 'text-white' : 'text-crimson'} />
+            <span className="hidden sm:inline">Hotspots</span>
+          </button>
+          <label className="hidden md:flex items-center gap-1.5 font-mono text-[10px] text-muted">
+            <span>Min:</span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={minRot}
+              onChange={(event) => setMinRot(Number(event.target.value))}
+              className="h-1.5 w-16 cursor-pointer appearance-none rounded-full bg-hairline accent-ink"
+            />
+            <span className="w-4 font-semibold text-ink">{minRot}</span>
+          </label>
+        </div>
+        <span aria-hidden="true" className="hidden lg:block h-4 w-px bg-hairline shrink-0" />
+        <div className="hidden lg:flex shrink-0 items-center gap-3 font-mono text-[11px] text-muted whitespace-nowrap select-none">
+          <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap"><span className="h-2 w-2 shrink-0 rounded-full bg-emerald" />&lt;40</span>
+          <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap"><span className="h-2 w-2 shrink-0 rounded-full bg-amber" />40–69</span>
+          <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap"><span className="h-2 w-2 shrink-0 rounded-full bg-crimson" />≥70</span>
+        </div>
+        <span aria-hidden="true" className="h-4 w-px bg-hairline" />
+        <div className="flex items-center rounded-xl border border-hairline bg-surface/40 p-0.5">
+          <button
+            type="button"
+            onClick={() => animateCamera({ ...camera, scale: Math.max(0.35, camera.scale - 0.1) })}
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition hover:bg-white hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink"
+            aria-label="Zoom out"
+            title="Zoom out"
+          >
+            <ZoomOut size={13} />
+          </button>
+          <span className="min-w-9 text-center font-mono text-[10px] font-semibold text-muted select-none">
+            {Math.round(camera.scale * 100)}%
+          </span>
+          <button
+            type="button"
+            onClick={() => animateCamera({ ...camera, scale: Math.min(1.5, camera.scale + 0.1) })}
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition hover:bg-white hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink"
+            aria-label="Zoom in"
+            title="Zoom in"
+          >
+            <ZoomIn size={13} />
+          </button>
+          <span aria-hidden="true" className="mx-0.5 h-3.5 w-px bg-hairline" />
+          <button
+            type="button"
+            onClick={() => animateCamera({ x: 0, y: 20, scale: 0.92 })}
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition hover:bg-white hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink"
+            aria-label="Fit graph"
+            title="Reset view (Fit to screen)"
+          >
+            <Maximize2 size={13} />
+          </button>
+        </div>
       </div>}
       {briefOpen && specimen && <div role="dialog" aria-modal="true" aria-labelledby="repo-brief-title" className="fixed inset-0 z-50 flex items-center justify-center bg-ink/20 p-6" onClick={() => setBriefOpen(false)}><div className="w-full max-w-lg rounded-2xl border border-hairline bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><div className="flex items-center justify-between"><div><p className="font-mono text-[10px] text-muted">EXECUTIVE REPO BRIEFING</p><h2 id="repo-brief-title" className="mt-1 font-display text-lg font-medium">{specimen.title}</h2></div><button type="button" onClick={() => setBriefOpen(false)} className="rounded-full border border-hairline px-2.5 py-1 text-xs text-muted">Close</button></div><p className="mt-4 text-sm leading-relaxed text-muted">{briefText}</p><h3 className="mt-5 font-display text-[13px] font-medium">Top refactoring priorities</h3><ol className="mt-2 space-y-2">{briefNodes.map((node, index) => <li key={node.id} className="flex items-center justify-between rounded-lg bg-surface px-3 py-2 text-xs"><span><b className="mr-2 font-mono text-muted">0{index + 1}</b>{node.name}</span><span className="font-mono text-crimson">{node.rotScore} rot</span></li>)}</ol><button type="button" onClick={speakBrief} className="mt-5 flex items-center gap-2 rounded-xl bg-ink px-3 py-2 text-xs font-medium text-white"><Volume2 size={14} />Listen to 15s Brief</button></div></div>}
-      {showComparison && specimen && <div className="z-10 border-b border-hairline bg-surface px-5 py-2 text-xs text-muted">Current audit: <strong className="text-ink">{specimen.nodes.length} files, {Math.round(specimen.nodes.reduce((sum, node) => sum + node.rotScore, 0) / Math.max(1, specimen.nodes.length))} average rot</strong>{previousAudit ? <> · Previous: <strong className="text-ink">{previousAudit.files} files, {previousAudit.averageRot} average rot</strong></> : ' · No previous audit for this repository yet.'}</div>}
 
       {requestState.status === 'loading' && (
         <div role="status" aria-live="polite" className="border-b border-hairline bg-surface px-5 py-3 font-mono text-xs">
@@ -835,7 +1025,7 @@ function WorkspaceContent() {
               onSelectNode={selectNode}
               isolateHotspots={isolateHotspots}
             />
-            {selectedNodeId && <SeanceConsole specimen={specimen} selectedNodeId={selectedNodeId} onSpotlight={handleSpotlight} />}
+            {specimen && <SeanceConsole specimen={specimen} selectedNodeId={selectedNodeId} onSpotlight={handleSpotlight} />}
           </div>
           {selectedNodeId && <DetailPanel specimen={specimen} selectedNodeId={selectedNodeId} onBlastRadius={analyzeBlastRadius} onSelectNode={selectNode} onClose={() => setSelectedNodeId(null)} />}
         </div>
