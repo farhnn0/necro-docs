@@ -159,6 +159,8 @@ export async function getInstallationRepositories(
  * Returns the GitHub App installation URL where users choose "All repositories" or "Only select repositories".
  */
 export function getGitHubAppInstallUrl(): string {
-  const slug = process.env.GITHUB_APP_SLUG?.trim() || 'necrodocs-scanner';
+  const rawSlug = process.env.GITHUB_APP_SLUG?.trim() || 'necrodocs-scanner';
+  // Sanitize slug to valid GitHub URL format (lowercase, hyphens, no spaces)
+  const slug = rawSlug.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
   return `https://github.com/apps/${slug}/installations/new`;
 }
