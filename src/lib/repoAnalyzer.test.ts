@@ -321,6 +321,52 @@ describe('static scanner fairness', () => {
     expect(nodes['src/silent.ts'].rot).toBeGreaterThan(nodes['src/fallback.ts'].rot);
   });
 
+  it('reads a type copied into an AI prompt as schema drift, not as duplicated code', async () => {
+    const schema = ['interface AnalysisResult {', '  totalFiles: number;', '  totalLines: number;', '  languages: Record<string, number>;', '  dependencies: string[];', '  complexity: string;', '}'];
+    const nodes = await analyze({
+      'src/types.ts': `export ${schema.join('\n')}\n`,
+      'src/ai.ts': ['export const prompt = `Reply with JSON shaped as:', ...schema, 'Answer only with JSON.`;', ''].join('\n'),
+    });
+    const ai = nodes['src/ai.ts'].findings.join('\n');
+    expect(ai).toContain('Prompt Schema Drift Risk');
+    expect(ai).toContain('`AnalysisResult` (declared in src/types.ts)');
+    expect(ai).not.toMatch(/same \d\+ line block/);
+    expect(nodes['src/types.ts'].findings.join('\n')).not.toMatch(/same \d\+ line block/);
+    // Informational only: no rot points beyond the baseline of an otherwise trivial file.
+    expect(nodes['src/ai.ts'].rot).toBeLessThanOrEqual(2);
+  });
+
+  it('downgrades a fallback chain and a sanitized HTML sink, but still flags the real versions', async () => {
+    const nodes = await analyze({
+      'src/parse.ts': [
+        'export function parse(raw: string) {', // 1
+        '  let parsed: unknown;', // 2
+        '  try { parsed = JSON.parse(raw); } catch (_err) {}', // 3
+        '  if (!parsed) { parsed = JSON.parse(repair(raw)); }', // 4
+        '  return parsed;', // 5
+        '}',
+        'export function loud(raw: string) {', // 7
+        '  try { JSON.parse(raw); } catch (_err) {}', // 8
+        '  return 1;',
+        '}',
+        '',
+      ].join('\n'),
+      'src/Post.tsx': [
+        'export const Safe = (p: { html: string }) => <div dangerouslySetInnerHTML={{ __html: safeSanitize(p.html) }} />;', // 1
+        'export const Risky = (p: { html: string }) => <div dangerouslySetInnerHTML={{ __html: p.html }} />;', // 2
+        '',
+      ].join('\n'),
+    });
+    const parse = nodes['src/parse.ts'].findings.join('\n');
+    expect(parse).toContain('Line 8: Empty catch block swallows exceptions silently.');
+    expect(parse).not.toContain('Line 3: Empty catch');
+    expect(parse).toContain('Line 3: catch is the first stage of a multi-stage fallback');
+
+    const post = nodes['src/Post.tsx'].findings.join('\n');
+    expect(post).toContain('Line 2: dangerouslySetInnerHTML renders `p.html`, which is not sanitized');
+    expect(post).toContain('Line 1: dangerouslySetInnerHTML receives HTML sanitized by safeSanitize()');
+  });
+
   it('measures control-flow nesting, not JSX or object indentation', async () => {
     const jsx = [
       'export function Page() {',

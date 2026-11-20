@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { PRESET_SPECIMENS } from '@/lib/conversion/specimens';
 import type { IngestedSpecimen, IngestedWorkspaceNode } from '@/lib/conversion/types';
-import { buildDisplaySpecimen, CAMERA_TOP_OFFSET, fitCamera, fitFocusCamera, hiddenFileCount, MIN_SCALE } from './graphDisplay';
+import {
+  buildDisplaySpecimen,
+  CAMERA_TOP_OFFSET,
+  fitCamera,
+  fitFocusCamera,
+  hiddenFileCount,
+  initialGraphCamera,
+  INITIAL_READABLE_SCALE,
+  MIN_SCALE,
+} from './graphDisplay';
 
 const node = (id: string, featured: boolean): IngestedWorkspaceNode => ({
   kind: 'ingested', id, name: id, path: id, linesOfCode: 10, rotScore: 0, position: { x: 0, y: 0 },
@@ -56,5 +65,13 @@ describe('camera', () => {
     const allCx = (0 + 9 * 280 + 226) / 2;
     const focusCx = (0 + 226) / 2;
     expect(cam.x + cam.scale * (focusCx - allCx)).toBeCloseTo(0, 5);
+  });
+
+  it('guarantees a comfortable readable scale on initial entry for large graphs', () => {
+    const initCam = initialGraphCamera(grid, { width: 1200, height: 700 });
+    expect(initCam.scale).toBe(INITIAL_READABLE_SCALE);
+    expect(initCam.scale).toBeGreaterThanOrEqual(0.75);
+    expect(initCam.x).toBe(0);
+    expect(initCam.y).toBeGreaterThan(CAMERA_TOP_OFFSET);
   });
 });

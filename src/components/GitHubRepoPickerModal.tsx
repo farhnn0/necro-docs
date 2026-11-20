@@ -141,9 +141,9 @@ export function GitHubRepoPickerModal({
                     {repo.private ? (
                       <span
                         title="Private repository"
-                        className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-mono font-medium text-amber-600 dark:text-amber-400"
+                        className="inline-flex items-center gap-1 rounded border border-hairline bg-surface px-1.5 py-0.5 text-[10px] font-mono font-medium text-ink"
                       >
-                        <Lock className="h-2.5 w-2.5" />
+                        <Lock className="h-2.5 w-2.5 text-muted" />
                         Private
                       </span>
                     ) : (

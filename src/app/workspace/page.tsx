@@ -49,6 +49,7 @@ import {
   fitCamera,
   fitFocusCamera,
   hiddenFileCount,
+  initialGraphCamera,
   keyFileIds,
   MAX_REVEALED,
   MIN_SCALE,
@@ -812,7 +813,7 @@ function WorkspaceContent() {
     const showAnalysis = (analysis: RepoAnalysis) => {
       const analyzed = convertRepoAnalysis(analysis);
       setSpecimen(analyzed);
-      setCamera(fitCamera(buildDisplaySpecimen(analyzed, 'key', []).nodes, canvasViewport()));
+      setCamera(initialGraphCamera(buildDisplaySpecimen(analyzed, 'key', []).nodes, canvasViewport()));
       // Jangan buka Autopsy Report otomatis setelah analyze. Inspector muncul setelah node diklik.
       setSelectedNodeId(null);
       setRequestState({ status: 'success', repository: analysis.title });

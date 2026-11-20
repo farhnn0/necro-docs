@@ -14,6 +14,7 @@ export const NODE_WIDTH = 226;
 export const NODE_HEIGHT = 132;
 export const MIN_SCALE = 0.2;
 export const DEFAULT_SCALE = 0.92;
+export const INITIAL_READABLE_SCALE = 0.75;
 /** Default camera.y: keeps the graph clear of the floating toolbar. */
 export const CAMERA_TOP_OFFSET = 20;
 
@@ -68,6 +69,36 @@ export function fitCamera(nodes: readonly Pick<WorkspaceNode, 'position'>[], vie
   const box = bounds(nodes);
   const scale = Math.min(DEFAULT_SCALE, Math.max(MIN_SCALE, Math.min(viewport.width / box.width, viewport.height / box.height)));
   return { x: 0, y: CAMERA_TOP_OFFSET, scale: Math.round(scale * 100) / 100 };
+}
+
+/**
+ * Camera used on initial repository load. Unlike `fitCamera` which zooms out aggressively to fit the
+ * entire graph, `initialGraphCamera` guarantees a comfortable, readable zoom floor (defaults to 75%)
+ * and positions the camera at the top of the graph so entry points and hotspot nodes are immediately
+ * legible without manual zooming.
+ */
+export function initialGraphCamera(
+  nodes: readonly Pick<WorkspaceNode, 'position'>[],
+  viewport: { width: number; height: number },
+  minScale = INITIAL_READABLE_SCALE
+): Camera {
+  if (nodes.length === 0) return { x: 0, y: CAMERA_TOP_OFFSET, scale: DEFAULT_SCALE };
+  const box = bounds(nodes);
+  const naturalScale = Math.min(
+    DEFAULT_SCALE,
+    Math.min(viewport.width / box.width, viewport.height / box.height)
+  );
+
+  if (naturalScale >= minScale) {
+    return { x: 0, y: CAMERA_TOP_OFFSET, scale: Math.round(naturalScale * 100) / 100 };
+  }
+
+  const scale = minScale;
+  const paddingTop = 90;
+  const targetTopY = -viewport.height / 2 + paddingTop;
+  const cameraY = Math.round(targetTopY + scale * (box.height / 2));
+
+  return { x: 0, y: cameraY, scale: Math.round(scale * 100) / 100 };
 }
 
 /** Camera that zooms to fit `focus` (a subset of the drawn nodes `all`) and centres it. */

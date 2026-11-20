@@ -21,6 +21,7 @@ import { IngestError } from '@/lib/ingest/errors';
 import { mapGitHubError } from '@/lib/ingest/github';
 import { detectRelations, resolveImport } from '@/lib/ingest/relations';
 import { layoutGraph } from '@/lib/graphLayout';
+import { scanAst, type AstScan } from '@/lib/astScan';
 
 // ============================================================================
 // Public types (the JSON contract returned by POST /api/ingest)
@@ -345,7 +346,9 @@ async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) 
 
 type IssueKind =
   | 'secret' | 'eval' | 'empty-catch' | 'unsafe-html' | 'ts-ignore' | 'deep-nesting' | 'any'
-  | 'long-function' | 'debt' | 'duplicate' | 'default-catch' | 'branching' | 'ignored-catch';
+  | 'long-function' | 'debt' | 'duplicate' | 'default-catch' | 'branching' | 'ignored-catch'
+  // Context-aware kinds from the AST pass (astScan.ts). All rank low: they inform, they do not accuse.
+  | 'monolith' | 'prompt-drift' | 'fallback-chain' | 'html-notice';
 
 /**
  * Default ranking. An empty, undocumented catch stays near the top, but a catch that only returns a
@@ -364,7 +367,11 @@ const SEVERITY: Record<IssueKind, number> = {
   duplicate: 60,
   'default-catch': 55,
   branching: 50,
+  monolith: 55,
+  'prompt-drift': 30,
   'ignored-catch': 25,
+  'fallback-chain': 20,
+  'html-notice': 15,
 };
 
 interface Issue {
@@ -373,6 +380,8 @@ interface Issue {
   severity: number;
   line: number | null;
   text: string;
+  /** Concrete next step. When this issue ranks first it replaces the generic recommendation. */
+  suggestion?: string;
 }
 
 const issue = (kind: IssueKind, line: number | null, text: string, severity = SEVERITY[kind]): Issue => ({ kind, severity, line, text });
@@ -407,6 +416,10 @@ interface Scanned {
   issues: Issue[];
   /** Points from silent failures and technical debt, before the cap. */
   silent: number;
+  /** From the AST pass; empty for Python and Go. */
+  stringLines: Set<number>;
+  declaredTypes: string[];
+  promptTypeRefs: Array<{ name: string; line: number }>;
 }
 
 /**
@@ -719,6 +732,11 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
   const { depth, line: depthLine } = controlDepth(lang, bare, bareText, lineAt);
   const issues: Issue[] = [];
   let silent = 0;
+  // TypeScript/JavaScript get an AST pass for the checks that need context. A parse failure must never fail the analysis.
+  let ast: AstScan | null = null;
+  if (lang === 'js') {
+    try { ast = scanAst(path, content); } catch { ast = null; }
+  }
 
   // Hard-coded credentials (+20 once). The value itself is never echoed into the finding.
   const secretLine = lines.findIndex((l) => SECRET_RE.test(l));
@@ -728,7 +746,12 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
   }
 
   // Catch blocks: empty (+18 once) or returning a placeholder (+6 once). Documented ignores add nothing.
-  const catches = scanCatchBlocks(lang, bare, bareText, comment, lineAt);
+  // An empty catch that is only the first stage of a fallback (a later step retries or repairs) is not swallowing.
+  const catches = scanCatchBlocks(lang, bare, bareText, comment, lineAt).map((c) =>
+    c.kind === 'empty-catch' && c.line !== null && ast?.fallbackCatchLines.has(c.line)
+      ? issue('fallback-chain', c.line, `Line ${c.line}: catch is the first stage of a multi-stage fallback (a later step retries or repairs); consider logging the first failure at debug level.`)
+      : c,
+  );
   if (catches.some((c) => c.kind === 'empty-catch')) silent += ROT.EMPTY_CATCH;
   else if (catches.some((c) => c.kind === 'default-catch')) silent += ROT.SOFT_CATCH;
   issues.push(...catches);
@@ -753,10 +776,17 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
         issues.push(issue('any', hits[0], `Line ${hits[0]}: \`any\` is used ${hits.length} times, which disables type checking.`));
       }
     }
-    // Raw HTML injection is an XSS risk unless the value is sanitized first.
-    const html = firstLine(/\bdangerouslySetInnerHTML\b|\.(?:inner|outer)HTML\s*=(?!=)|\bdocument\.write\s*\(|\.insertAdjacentHTML\s*\(/, bare);
+    // Raw HTML injection is an XSS risk unless the value is sanitized first. React's dangerouslySetInnerHTML is
+    // judged by the AST pass (sanitizer / static dictionary / unsafe); the regex only keeps it when the AST is unavailable.
+    const sinks = ast
+      ? /\.(?:inner|outer)HTML\s*=(?!=)|\bdocument\.write\s*\(|\.insertAdjacentHTML\s*\(/
+      : /\bdangerouslySetInnerHTML\b|\.(?:inner|outer)HTML\s*=(?!=)|\bdocument\.write\s*\(|\.insertAdjacentHTML\s*\(/;
+    const html = firstLine(sinks, bare);
     if (html.count > 0) {
       issues.push(issue('unsafe-html', html.line, `Line ${html.line}: Raw HTML is injected into the page${html.count > 1 ? ` (${html.count} places)` : ''}; unsanitized input here is an XSS risk.`));
+    }
+    for (const finding of ast?.findings ?? []) {
+      issues.push({ ...issue(finding.kind, finding.line, finding.text), ...(finding.suggestion ? { suggestion: finding.suggestion } : {}) });
     }
   }
   if (lang !== 'go') {
@@ -783,9 +813,10 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
     issues.push(issue('long-function', long.line, `Line ${long.line}: ${long.name}() spans ${long.length} lines; split it into smaller functions.`));
   }
   if (depth >= DEEP_NESTING) {
-    issues.push(
-      issue('deep-nesting', depthLine, `Line ${depthLine}: Control flow is nested ${depth} levels deep (if/loop/try inside each other).`, depth > DEEP_NESTING ? SEVERITY['deep-nesting'] : 60),
-    );
+    issues.push({
+      ...issue('deep-nesting', depthLine, `Line ${depthLine}: Control flow is nested ${depth} levels deep (if/loop/try inside each other).`, depth > DEEP_NESTING ? SEVERITY['deep-nesting'] : 60),
+      ...(ast?.nestingHint ? { suggestion: ast.nestingHint } : {}),
+    });
   }
   // Density, not a raw count: 20 branches spread over 700 lines is not complex.
   if (branches >= 10 && branches / Math.max(codeLoc, 1) >= HIGH_BRANCH_DENSITY) {
@@ -793,7 +824,28 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
   }
 
   const name = path.split('/').pop() ?? path;
-  return { path, name, lang, lines, codeText, loc, codeLoc, branches, depth, issues: mergeByKind(issues), silent };
+  return {
+    path, name, lang, lines, codeText, loc, codeLoc, branches, depth, issues: mergeByKind(issues), silent,
+    stringLines: ast?.stringLines ?? new Set(), declaredTypes: ast?.declaredTypes ?? [], promptTypeRefs: ast?.promptTypeRefs ?? [],
+  };
+}
+
+/**
+ * A type declared in one file and re-typed inside a string literal (usually an AI prompt that shows the model
+ * its output schema). That is not duplicated code; it is a schema that silently drifts when the type changes.
+ */
+function markPromptDrift(files: Scanned[]): void {
+  const owners = new Map<string, string>();
+  for (const f of files) for (const type of f.declaredTypes) if (!owners.has(type)) owners.set(type, f.path);
+  for (const f of files) {
+    const hits = f.promptTypeRefs.filter((ref) => owners.has(ref.name) && !f.declaredTypes.includes(ref.name));
+    if (hits.length === 0) continue;
+    const [first] = hits;
+    f.issues = mergeByKind([
+      ...f.issues,
+      issue('prompt-drift', first.line, `Line ${first.line}: Prompt Schema Drift Risk: the text of \`${first.name}\` (declared in ${owners.get(first.name)}) is copied into a string literal, so the prompt and the type can change apart.`),
+    ]);
+  }
 }
 
 // ============================================================================
@@ -834,6 +886,8 @@ function markDuplicates(files: Scanned[]): void {
   // skipped instead of breaking the window, so two copies of a try/catch block still line up.
   const meaningful = files.map((f) =>
     f.codeText.split('\n').flatMap((l, i) => {
+      // Text inside a multi-line string/template (an AI prompt, SQL, a schema) is data, not duplicated code.
+      if (f.stringLines.has(i + 1)) return [];
       const text = l.trim().replace(/\s+/g, ' ');
       return text.length >= 10 && !/^(?:import|export \{|export \* from|from |require\(|\}|\{|\)|\]|<\/)/.test(text) ? [{ text, line: i + 1 }] : [];
     }),
@@ -992,6 +1046,10 @@ const RECOMMENDATIONS: Record<IssueKind, (line: number | null) => string> = {
   'default-catch': (l) => `Log the error caught at line ${l} before returning the placeholder, or return an explicit error result.`,
   branching: () => 'Extract the branching logic into small, well-named functions to lower cyclomatic complexity.',
   'ignored-catch': (l) => `Narrow the deliberately ignored catch at line ${l} to the one error type that is expected.`,
+  monolith: () => 'Split the file by domain and keep it as a barrel that re-exports the pieces, so imports do not change.',
+  'prompt-drift': (l) => `Build the schema text at line ${l} from the real type (or validate the model output against it) so the prompt cannot drift from the type.`,
+  'fallback-chain': (l) => `Log the first-stage failure at line ${l} at debug level, so a fallback that always fires is visible.`,
+  'html-notice': (l) => `Keep the sanitizer or static source at line ${l} on every path that reaches dangerouslySetInnerHTML.`,
 };
 
 /** Deterministic explanation used when no AI provider is configured, or when it fails. */
@@ -1020,7 +1078,7 @@ function fallbackExplanation(f: Scanned, degree: { in: number; out: number }, sc
 
   const top = ranked[0];
   const recommendation = top
-    ? RECOMMENDATIONS[top.kind](top.line)
+    ? top.suggestion ?? RECOMMENDATIONS[top.kind](top.line)
     : degree.in > 3
       ? `Keep the exported contract of ${f.name} stable and add contract tests before changing it, because ${degree.in} files depend on it.`
       : score < 30
@@ -1384,6 +1442,7 @@ export async function analyzeRepository(repoUrl: string, options: AnalyzeOptions
   }
 
   markDuplicates(files);
+  markPromptDrift(files);
   const edges = resolveEdges(files);
   const degree = new Map<string, { in: number; out: number }>(files.map((f) => [f.path, { in: 0, out: 0 }]));
   for (const e of edges) {
