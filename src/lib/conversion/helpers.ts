@@ -1,4 +1,4 @@
-import type { RepoAnalysis } from '@/lib/repoAnalyzer';
+import type { RepoAnalysis, RepoCoverage } from '@/lib/repoAnalyzer';
 import type {
   IngestedSpecimen,
   IngestedWorkspaceNode,
@@ -115,16 +115,31 @@ export function convertRepoAnalysis(analysis: RepoAnalysis): IngestedSpecimen {
       summary: node.summary,
       recommendation: node.recommendation,
       codeExcerpt: node.code,
+      // Analyses stored before these fields existed showed every file and did not record the source.
+      featured: node.featured !== false,
+      explainedBy: node.explainedBy === 'static' ? 'static' : 'ai',
     })),
     edges: analysis.edges
       .filter((edge) => ids.has(edge.from) && ids.has(edge.to))
       .map((edge): WorkspaceEdge => ({ id: `${edge.from}->${edge.to}`, source: edge.from, target: edge.to })),
+    coverage: isCoverage(analysis.coverage) ? analysis.coverage : null,
   };
 }
 /** `sessionStorage` key holding the last analysis, written by the landing page and read by the workspace. */
 export const ACTIVE_REPO_STORAGE_KEY = 'necro_active_repo';
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
+/** Coverage is optional on stored data; a malformed one is dropped instead of failing the analysis. */
+function isCoverage(value: unknown): value is RepoCoverage {
+  if (value === null || typeof value !== 'object') return false;
+  const c = value as Record<string, unknown>;
+  const skipped = c.skipped as Record<string, unknown> | null;
+  return ['totalFiles', 'analyzed', 'featured', 'fileLimit'].every((key) => isFiniteNumber(c[key]))
+    && typeof c.treeTruncated === 'boolean'
+    && skipped !== null && typeof skipped === 'object'
+    && ['tests', 'config', 'generated', 'tooLarge', 'overLimit', 'unreadable'].every((key) => isFiniteNumber(skipped[key]));
+}
 
 /** Runtime check for data that crosses a trust boundary (network response, sessionStorage). */
 export function isRepoAnalysis(value: unknown): value is RepoAnalysis {

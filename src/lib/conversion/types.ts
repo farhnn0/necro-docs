@@ -1,4 +1,5 @@
 import type { ApiResponse } from '@/lib/types';
+import type { RepoCoverage } from '@/lib/repoAnalyzer';
 
 export type PresetId = 'payment' | 'scraper' | 'realtime';
 
@@ -31,6 +32,10 @@ export interface IngestedWorkspaceNode extends WorkspaceNodeBase {
   summary: string;
   recommendation: string;
   codeExcerpt: string;
+  /** Shown in the key-files graph view. */
+  featured: boolean;
+  /** 'static' when the explanation comes from the heuristic scanner instead of the AI. */
+  explainedBy: 'ai' | 'static';
 }
 export type WorkspaceNode = PresetWorkspaceNode | IngestedWorkspaceNode;
 
@@ -67,6 +72,8 @@ export interface IngestedSpecimen {
   overallRot: number;
   nodes: IngestedWorkspaceNode[];
   edges: WorkspaceEdge[];
+  /** Null for analyses stored before coverage was reported. */
+  coverage: RepoCoverage | null;
 }
 export type Specimen = PresetSpecimen | IngestedSpecimen;
 

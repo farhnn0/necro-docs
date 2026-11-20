@@ -6,6 +6,10 @@ interface InputEdge { source: string; target: string; }
 interface SeanceBody { question?: unknown; selectedNodeId?: unknown; nodes?: unknown; edges?: unknown; repoTitle?: unknown; }
 interface SeanceData { answer: string; spotlightNodeIds: string[]; riskLevel: 'low' | 'medium' | 'high'; selectNodeId?: string; audioBase64: string | null; speechText?: string; }
 
+// Same file budget as the analyzer (MAX_FILES in repoAnalyzer.ts), so a full analysis can always be asked about.
+const MAX_NODES = 400;
+const MAX_EDGES = 4000;
+
 const responseError = (message: string, status = 400) => NextResponse.json({ success: false, error: { code: 'INVALID_REQUEST', message } }, { status });
 
 function safeGraph(body: SeanceBody) {
@@ -15,13 +19,13 @@ function safeGraph(body: SeanceBody) {
     if (!item || typeof item !== 'object') return false;
     const n = item as Record<string, unknown>;
     return typeof n.id === 'string' && typeof n.path === 'string' && typeof n.rotScore === 'number' && Number.isFinite(n.rotScore);
-  }).slice(0, 200).map((n) => ({ id: n.id, path: n.path.slice(0, 500), name: typeof n.name === 'string' ? n.name : n.path.split('/').pop(), rotScore: Math.max(0, Math.min(100, n.rotScore)), code: typeof n.code === 'string' ? n.code.slice(0, 12_000) : undefined }));
+  }).slice(0, MAX_NODES).map((n) => ({ id: n.id, path: n.path.slice(0, 500), name: typeof n.name === 'string' ? n.name : n.path.split('/').pop(), rotScore: Math.max(0, Math.min(100, n.rotScore)), code: typeof n.code === 'string' ? n.code.slice(0, 12_000) : undefined }));
   const ids = new Set(nodes.map((node) => node.id));
   const edges: InputEdge[] = rawEdges.filter((item): item is InputEdge => {
     if (!item || typeof item !== 'object') return false;
     const e = item as Record<string, unknown>;
     return typeof e.source === 'string' && typeof e.target === 'string' && ids.has(e.source) && ids.has(e.target);
-  }).slice(0, 500).map((edge) => ({ source: edge.source, target: edge.target }));
+  }).slice(0, MAX_EDGES).map((edge) => ({ source: edge.source, target: edge.target }));
   return { nodes, edges, ids };
 }
 
@@ -138,10 +142,10 @@ export async function POST(request: Request) {
   if ('rawContent' in body) return responseError('Source content is not accepted.');
   const question = typeof body.question === 'string' ? body.question.trim().slice(0, 500) : '';
   if (!question) return responseError('A question is required.');
-  if (Array.isArray(body.nodes) && body.nodes.length > 200) return responseError('Question or graph exceeds the request limits.');
-  if (Array.isArray(body.edges) && body.edges.length > 500) return responseError('Question or graph exceeds the request limits.');
+  if (Array.isArray(body.nodes) && body.nodes.length > MAX_NODES) return responseError('Question or graph exceeds the request limits.');
+  if (Array.isArray(body.edges) && body.edges.length > MAX_EDGES) return responseError('Question or graph exceeds the request limits.');
   const { nodes, edges, ids } = safeGraph(body);
-  if (nodes.length > 200 || edges.length > 500) return responseError('Question or graph exceeds the request limits.');
+  if (nodes.length > MAX_NODES || edges.length > MAX_EDGES) return responseError('Question or graph exceeds the request limits.');
   const selectedNodeId = typeof body.selectedNodeId === 'string' && ids.has(body.selectedNodeId) ? body.selectedNodeId : null;
   const focus = nodes.find((node) => node.id === selectedNodeId);
   const neighborIds = new Set(edges.filter((edge) => edge.source === selectedNodeId || edge.target === selectedNodeId).flatMap((edge) => [edge.source, edge.target]));

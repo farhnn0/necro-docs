@@ -3,10 +3,11 @@
  *
  * Zero-clone pipeline, see `public/panduan_master_prompt_analisis_repo.md`:
  *   1. parse the URL and resolve the default branch  (GET /repos/{owner}/{repo})
- *   2. fetch the recursive file tree and pick up to 22 core source files
- *   3. fetch raw file contents in parallel (raw.githubusercontent.com)
+ *   2. fetch the recursive file tree and pick every source file within the file and byte budgets
+ *   3. fetch raw file contents with bounded concurrency (raw.githubusercontent.com)
  *   4. scan each file: dependency edges + code-rot score + findings with line numbers
- *   5. lay the nodes out in four layered columns
+ *   5. mark the key files (hotspots, hubs, entry points); only those get AI explanations
+ *   6. lay the nodes out in layered columns (see graphLayout.ts)
  *
  * Server-only: import types from here with `import type` in client code.
  *
@@ -19,6 +20,7 @@ import type { LanguageFamily } from '@/lib/ingest/analyze';
 import { IngestError } from '@/lib/ingest/errors';
 import { mapGitHubError } from '@/lib/ingest/github';
 import { detectRelations, resolveImport } from '@/lib/ingest/relations';
+import { layoutGraph } from '@/lib/graphLayout';
 
 // ============================================================================
 // Public types (the JSON contract returned by POST /api/ingest)
@@ -37,11 +39,37 @@ export interface RepoNode {
   summary: string;
   recommendation: string;
   code: string;
+  /** One of the key files the workspace shows first (hotspots, hubs, entry points). */
+  featured: boolean;
+  /** Who wrote summary/findings/recommendation. Only key files are sent to the AI provider. */
+  explainedBy: 'ai' | 'static';
 }
 
 export interface RepoEdge {
   from: string;
   to: string;
+}
+
+/** What was and was not analyzed, so the UI can state its coverage honestly. */
+export interface RepoCoverage {
+  /** Supported source files in the repository tree (.ts/.tsx/.js/.jsx/.py/.go, excluding .d.ts). */
+  totalFiles: number;
+  analyzed: number;
+  featured: number;
+  skipped: {
+    tests: number;
+    config: number;
+    /** node_modules, dist, build, vendor and dot-folders. */
+    generated: number;
+    tooLarge: number;
+    /** Eligible files beyond the file-count or byte budget. */
+    overLimit: number;
+    /** Selected but GitHub did not return the file. */
+    unreadable: number;
+  };
+  /** GitHub cut the recursive tree short (very large repositories). */
+  treeTruncated: boolean;
+  fileLimit: number;
 }
 
 export interface RepoAnalysis {
@@ -51,6 +79,7 @@ export interface RepoAnalysis {
   overallRot: number;
   nodes: RepoNode[];
   edges: RepoEdge[];
+  coverage: RepoCoverage;
 }
 
 export interface AnalyzeOptions {
@@ -64,14 +93,23 @@ export interface AnalyzeOptions {
 // Tunables
 // ============================================================================
 
-const MAX_FILES = 22;
+// Static analysis covers the whole codebase up to these budgets; only FEATURED_FILES go to the AI.
+// ponytail: the byte budget keeps the response small enough for sessionStorage (~5 MB). Upgrade
+// path for bigger repositories: keep `code` server-side and load it per file on demand.
+const MAX_FILES = 400;
+const MAX_TOTAL_BYTES = 3_500_000;
+const FEATURED_FILES = 30;
+const FETCH_CONCURRENCY = 12;
 const MAX_FILE_BYTES = 250_000; // skips bundles / generated files
 const SNIPPET_LINES = 40;
 const LONG_FUNCTION_LINES = 60;
+/** Control-flow depth (if/loop/try inside each other) at which nesting is reported. */
+const DEEP_NESTING = 4;
+/** Decision points per code line at which branching is called high (same cut as the summary text). */
+const HIGH_BRANCH_DENSITY = 0.18;
+/** Consecutive normalized lines that must match before a block counts as duplicated. */
+const DUPLICATE_WINDOW = 6;
 const RAW_HOST = 'https://raw.githubusercontent.com';
-const COLUMN_X = [110, 390, 670, 950] as const;
-const ROW_TOP = 90;
-const ROW_GAP = 170;
 
 const EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.py', '.go'] as const;
 const EXCLUDED_DIRS = new Set(['node_modules', '.next', 'dist', 'build', 'vendor', '.git', '__pycache__', '__tests__', 'tests', 'test']);
@@ -88,6 +126,9 @@ const ROT = {
   BRANCH_PER_PERCENT: 0.75, // points per branch per 100 LOC
   BRANCH_MAX: 15,
   EMPTY_CATCH: 18,
+  SOFT_CATCH: 6,
+  SECRET: 20,
+  DUPLICATE: 6,
   WEAK_TYPING: 10,
   DEBT_COMMENT: 8,
   SILENT_MAX: 30,
@@ -225,43 +266,132 @@ function langOf(path: string): Lang | null {
 const TEST_FILE_RE = /\.(?:test|spec)\.[^./]+$|^test_.+\.py$|_test\.(?:py|go)$|^conftest\.py$/;
 const CONFIG_FILE_RE = /\.config\.[cm]?[jt]sx?$|^\.[\w.-]*rc\.[cm]?[jt]s$|^setup\.py$/;
 
-function isCodeCandidate(entry: TreeEntry): boolean {
-  if (entry.type !== 'blob' || entry.mode === '120000') return false;
-  if (!entry.size || entry.size > MAX_FILE_BYTES) return false;
+const TEST_DIRS = new Set(['__tests__', 'tests', 'test']);
+
+/** Why a tree entry is or is not analyzed. `null` means it is not a supported source file at all. */
+type EntryClass = 'code' | 'test' | 'config' | 'generated' | 'tooLarge';
+
+function classifyEntry(entry: TreeEntry): EntryClass | null {
+  if (entry.type !== 'blob' || entry.mode === '120000') return null;
   const segments = entry.path.split('/');
   const name = segments[segments.length - 1];
-  if (!EXTENSIONS.some((ext) => name.toLowerCase().endsWith(ext)) || /\.d\.ts$/i.test(name)) return false;
-  if (TEST_FILE_RE.test(name) || CONFIG_FILE_RE.test(name)) return false;
-  return !segments.slice(0, -1).some((dir) => EXCLUDED_DIRS.has(dir) || dir.startsWith('.'));
+  if (!EXTENSIONS.some((ext) => name.toLowerCase().endsWith(ext)) || /\.d\.ts$/i.test(name)) return null;
+  const dirs = segments.slice(0, -1);
+  if (TEST_FILE_RE.test(name) || dirs.some((dir) => TEST_DIRS.has(dir))) return 'test';
+  if (dirs.some((dir) => EXCLUDED_DIRS.has(dir) || dir.startsWith('.'))) return 'generated';
+  if (CONFIG_FILE_RE.test(name)) return 'config';
+  if (!entry.size) return null;
+  if (entry.size > MAX_FILE_BYTES) return 'tooLarge';
+  return 'code';
 }
 
-/** Core folders first, then shallow paths, then bigger files; ties break on path. */
-function selectFiles(entries: TreeEntry[]): TreeEntry[] {
+/**
+ * Every eligible source file, core folders first, then shallow paths, then smaller files (so the byte
+ * budget covers as many files as possible); ties break on path. Also counts what was left out and why.
+ */
+function selectFiles(entries: TreeEntry[]): { selected: TreeEntry[]; coverage: Omit<RepoCoverage, 'analyzed' | 'featured' | 'treeTruncated'> } {
   const tier = (path: string) => {
     const dirs = path.split('/').slice(0, -1);
     return PRIORITY_DIRS.has(dirs[0] ?? '') ? 0 : dirs.some((d) => PRIORITY_DIRS.has(d)) ? 1 : 2;
   };
-  return entries
-    .filter(isCodeCandidate)
-    .sort(
-      (a, b) =>
-        tier(a.path) - tier(b.path) ||
-        a.path.split('/').length - b.path.split('/').length ||
-        (b.size ?? 0) - (a.size ?? 0) ||
-        (a.path < b.path ? -1 : a.path > b.path ? 1 : 0),
-    )
-    .slice(0, MAX_FILES);
+  const skipped = { tests: 0, config: 0, generated: 0, tooLarge: 0, overLimit: 0, unreadable: 0 };
+  const candidates: TreeEntry[] = [];
+  let totalFiles = 0;
+  for (const entry of entries) {
+    const kind = classifyEntry(entry);
+    if (kind === null) continue;
+    totalFiles++;
+    if (kind === 'code') candidates.push(entry);
+    else if (kind === 'test') skipped.tests++;
+    else skipped[kind]++;
+  }
+  candidates.sort(
+    (a, b) =>
+      tier(a.path) - tier(b.path) ||
+      a.path.split('/').length - b.path.split('/').length ||
+      (a.size ?? 0) - (b.size ?? 0) ||
+      (a.path < b.path ? -1 : a.path > b.path ? 1 : 0),
+  );
+  const selected: TreeEntry[] = [];
+  let bytes = 0;
+  for (const entry of candidates) {
+    if (selected.length >= MAX_FILES || bytes + (entry.size ?? 0) > MAX_TOTAL_BYTES) {
+      skipped.overLimit++;
+      continue;
+    }
+    selected.push(entry);
+    bytes += entry.size ?? 0;
+  }
+  return { selected, coverage: { totalFiles, skipped, fileLimit: MAX_FILES } };
+}
+
+/** Runs `fn` over `items` with at most `limit` calls in flight; results keep the input order. */
+async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 // ============================================================================
 // 4. Static scanner
 // ============================================================================
 
+type IssueKind =
+  | 'secret' | 'eval' | 'empty-catch' | 'unsafe-html' | 'ts-ignore' | 'deep-nesting' | 'any'
+  | 'long-function' | 'debt' | 'duplicate' | 'default-catch' | 'branching' | 'ignored-catch';
+
+/**
+ * Default ranking. An empty, undocumented catch stays near the top, but a catch that only returns a
+ * default or carries a comment explaining the ignore ranks below structural problems.
+ */
+const SEVERITY: Record<IssueKind, number> = {
+  secret: 100,
+  eval: 95,
+  'empty-catch': 90,
+  'unsafe-html': 85,
+  'ts-ignore': 80,
+  'deep-nesting': 75,
+  any: 70,
+  'long-function': 70,
+  debt: 65,
+  duplicate: 60,
+  'default-catch': 55,
+  branching: 50,
+  'ignored-catch': 25,
+};
+
 interface Issue {
+  kind: IssueKind;
   /** Higher sorts first when picking the 2-4 reported findings. */
   severity: number;
   line: number | null;
   text: string;
+}
+
+const issue = (kind: IssueKind, line: number | null, text: string, severity = SEVERITY[kind]): Issue => ({ kind, severity, line, text });
+
+/**
+ * One finding per kind: repeats of the same problem become "(N places: lines a, b)" on the first one,
+ * so a file with three swallowed catches still leaves room for its other problems.
+ */
+function mergeByKind(issues: Issue[]): Issue[] {
+  const groups = new Map<IssueKind, Issue[]>();
+  for (const item of issues) groups.set(item.kind, [...(groups.get(item.kind) ?? []), item]);
+  return [...groups.values()].map((group) => {
+    const sorted = [...group].sort((a, b) => (a.line ?? 0) - (b.line ?? 0));
+    const [first] = sorted;
+    if (sorted.length === 1) return first;
+    const lines = sorted.flatMap((item) => (item.line === null ? [] : [item.line]));
+    const shown = lines.slice(0, 5).join(', ') + (lines.length > 5 ? ', …' : '');
+    return { ...first, severity: Math.max(...sorted.map((item) => item.severity)), text: `${first.text.replace(/\.$/, '')} (${sorted.length} places: lines ${shown}).` };
+  });
 }
 
 interface Scanned {
@@ -293,12 +423,13 @@ function splitCode(content: string, lang: Lang): { lines: string[]; code: string
   const comment: string[] = [];
   let inBlock = false;
   let triple: string | null = null;
+  // Only template literals continue across lines; an unclosed ' or " is reset at the line end.
+  let quote: string | null = null;
 
   for (const line of lines) {
     let c = '';
     let b = '';
     let m = '';
-    let quote: string | null = null;
     for (let i = 0; i < line.length; i++) {
       const ch = line[i];
       if (inBlock) {
@@ -353,6 +484,7 @@ function splitCode(content: string, lang: Lang): { lines: string[]; code: string
       c += ch;
       b += ch;
     }
+    if (quote !== '`') quote = null;
     code.push(c);
     bare.push(b);
     comment.push(m);
@@ -399,39 +531,45 @@ const BRANCH_RE: Record<Lang, RegExp> = {
   py: /\b(?:if|elif|for|while|except|and|or)\b/g,
 };
 
-const LOGGING_RE = /\b(?:console|logger|logging|log|Sentry|print)\b|\.(?:error|warn|report\w*)\s*\(/;
 const DEBT_RE = /\b(?:TODO|FIXME|HACK|XXX)\b|\b[Uu]nsafe\b/;
 const KEYWORDS_NOT_METHODS = new Set(['if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'else', 'with']);
 
-/** True when a catch/except body neither rethrows, logs, nor looks at the caught error. */
-function swallows(body: string, errName: string | undefined, rethrow: RegExp): boolean {
-  if (rethrow.test(body) || LOGGING_RE.test(body)) return false;
-  return !(errName && new RegExp(`\\b${errName.replace(/\$/g, '\\$')}\\b`).test(body));
-}
+/** A catch body that only returns a placeholder value (`return null`, `return []`, `return None`, ...). */
+const DEFAULT_RETURN_RE = {
+  js: /^return\b\s*(?:null|undefined|false|true|0|-1|(['"`])\s*\1|\[\s*\]|\{\s*\})?\s*;?$/,
+  py: /^return(?:\s+(?:None|False|True|0|-1|\[\]|\{\}|(['"])\s*\1))?$/,
+};
 
-function scanCatchBlocks(lang: Lang, bare: string[], bareText: string, lineAt: (i: number) => number): Issue[] {
+/**
+ * Classifies each catch/except body:
+ * - empty, no comment          -> `empty-catch` (the error disappears)
+ * - empty with a comment       -> `ignored-catch` (deliberate, low severity)
+ * - only returns a placeholder -> `default-catch` (caller cannot tell failure from "no data")
+ * - anything else              -> not reported: rethrowing, logging, using the error, or running a
+ *                                 fallback (retry, alternative parse, assignment) is error handling.
+ */
+function scanCatchBlocks(lang: Lang, bare: string[], bareText: string, comment: string[], lineAt: (i: number) => number): Issue[] {
   const issues: Issue[] = [];
-  const empty = (line: number): Issue => ({
-    severity: 100,
-    line,
-    text: `Line ${line}: Empty ${lang === 'py' ? 'except' : 'catch'} block swallows exceptions silently.`,
-  });
-  const dropped = (line: number): Issue => ({
-    severity: 100,
-    line,
-    text: `Line ${line}: ${lang === 'py' ? 'except' : 'catch'} block never rethrows, logs, or uses the caught error.`,
-  });
+  const word = lang === 'py' ? 'except' : 'catch';
+  const documented = (from: number, to: number) => comment.slice(from - 1, to).some((text) => text.trim() !== '');
+  const classify = (line: number, endLine: number, body: string, defaultReturn: RegExp) => {
+    if (body === '' || (lang === 'py' && /^(?:pass|\.\.\.)$/.test(body))) {
+      issues.push(
+        documented(line, endLine)
+          ? issue('ignored-catch', line, `Line ${line}: ${word} block deliberately ignores the error (a comment explains why); check that only the expected error type is ignored.`)
+          : issue('empty-catch', line, `Line ${line}: Empty ${word} block swallows exceptions silently.`),
+      );
+    } else if (defaultReturn.test(body) && !documented(line, endLine)) {
+      issues.push(issue('default-catch', line, `Line ${line}: ${word} block returns a placeholder value and discards the error, so callers cannot tell a failure from an empty result.`));
+    }
+  };
 
   if (lang === 'js') {
     for (const m of bareText.matchAll(/\bcatch\b\s*(?:\(([^)]*)\))?\s*\{/g)) {
       const open = m.index + m[0].length - 1;
       const close = matchClose(bareText, open, '{', '}');
       if (close < 0) continue;
-      const body = bareText.slice(open + 1, close).trim();
-      const line = lineAt(m.index);
-      const errName = /^[\w$]+/.exec(m[1]?.trim() ?? '')?.[0];
-      if (body === '') issues.push(empty(line));
-      else if (swallows(body, errName, /\bthrow\b/)) issues.push(dropped(line));
+      classify(lineAt(m.index), lineAt(close), bareText.slice(open + 1, close).trim(), DEFAULT_RETURN_RE.js);
     }
   } else if (lang === 'py') {
     bare.forEach((raw, i) => {
@@ -439,19 +577,82 @@ function scanCatchBlocks(lang: Lang, bare: string[], bareText: string, lineAt: (
       if (!m) return;
       const indent = m[1].length;
       const body: string[] = [m[3]];
+      let last = i;
       for (let j = i + 1; j < bare.length; j++) {
         const next = bare[j];
         if (next.trim() !== '' && next.length - next.trimStart().length <= indent) break;
         body.push(next);
+        if (next.trim() !== '') last = j;
       }
-      const text = body.join('\n').trim();
-      const errName = /\bas\s+(\w+)/.exec(m[2])?.[1];
-      if (text === '' || /^(?:pass|\.\.\.)$/.test(text)) issues.push(empty(i + 1));
-      else if (swallows(text, errName, /\braise\b/)) issues.push(dropped(i + 1));
+      classify(i + 1, last + 1, body.join('\n').trim(), DEFAULT_RETURN_RE.py);
     });
   }
   return issues;
 }
+
+// ponytail: control-flow depth, not indentation, so JSX and object literals do not count as nesting.
+// Brace languages tag every `{` as control or not; Python stacks control headers by indent.
+const CONTROL_AFTER_PAREN = new Set(['if', 'for', 'while', 'switch', 'catch', 'with']);
+const CONTROL_WORD = new Set(['else', 'try', 'finally', 'do', 'catch']);
+
+function wordBefore(text: string, end: number): { word: string; start: number } {
+  let j = end;
+  while (j >= 0 && /\s/.test(text[j])) j--;
+  const stop = j;
+  while (j >= 0 && /[\w$]/.test(text[j])) j--;
+  return { word: text.slice(j + 1, stop + 1), start: j + 1 };
+}
+
+function isControlBrace(lang: Lang, text: string, brace: number): boolean {
+  if (lang === 'go') {
+    const head = text.slice(text.lastIndexOf('\n', brace - 1) + 1, brace);
+    return /^\s*(?:\}\s*)?(?:else\s+)?(?:if|for|switch|select)\b/.test(head) || /^\s*\}?\s*else\s*$/.test(head);
+  }
+  let j = brace - 1;
+  while (j >= 0 && /\s/.test(text[j])) j--;
+  if (text[j] !== ')') return CONTROL_WORD.has(wordBefore(text, j).word);
+  // Walk back over the balanced condition; strings are already blanked in `bare`.
+  let depth = 0;
+  for (; j >= 0; j--) {
+    if (text[j] === ')') depth++;
+    else if (text[j] === '(' && --depth === 0) break;
+  }
+  if (j < 0) return false;
+  const before = wordBefore(text, j - 1);
+  const word = before.word === 'await' ? wordBefore(text, before.start - 1).word : before.word;
+  return CONTROL_AFTER_PAREN.has(word);
+}
+
+function controlDepth(lang: Lang, bare: string[], bareText: string, lineAt: (i: number) => number): { depth: number; line: number } {
+  let best = { depth: 0, line: 1 };
+  if (lang === 'py') {
+    const stack: number[] = [];
+    bare.forEach((raw, i) => {
+      if (raw.trim() === '') return;
+      const indent = raw.length - raw.trimStart().length;
+      while (stack.length && indent <= stack[stack.length - 1]) stack.pop();
+      if (/^\s*(?:async\s+)?(?:if|elif|else|for|while|try|except|finally|with|match|case)\b.*:\s*$/.test(raw)) {
+        stack.push(indent);
+        if (stack.length > best.depth) best = { depth: stack.length, line: i + 1 };
+      }
+    });
+    return best;
+  }
+  const open: boolean[] = [];
+  let depth = 0;
+  for (let i = 0; i < bareText.length; i++) {
+    const ch = bareText[i];
+    if (ch === '{') {
+      const control = isControlBrace(lang, bareText, i);
+      open.push(control);
+      if (control && ++depth > best.depth) best = { depth, line: lineAt(i) };
+    } else if (ch === '}' && open.pop()) depth--;
+  }
+  return best;
+}
+
+/** Credential formats that are unambiguous enough to report without false alarms on placeholders. */
+const SECRET_RE = /\b(?:AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{50,}|sk-(?:proj-|ant-)?[A-Za-z0-9_-]{32,}|gsk_[A-Za-z0-9]{40,}|AIza[0-9A-Za-z_-]{35}|xox[abprs]-[A-Za-z0-9-]{10,})\b|-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/;
 
 /** Longest function body in lines, with its 1-based start line and name. */
 function longestFunction(
@@ -507,25 +708,6 @@ function longestFunction(
   return best;
 }
 
-function indentDepth(code: string[]): { depth: number; line: number } {
-  const rows = code
-    .map((raw, i) => ({ raw, i }))
-    .filter(({ raw }) => raw.trim() !== '')
-    .map(({ raw, i }) => {
-      const ws = /^[ \t]*/.exec(raw)![0];
-      const tabs = ws.split('\t').length - 1;
-      return { tabs, spaces: ws.length - tabs, line: i + 1 };
-    });
-  const positive = rows.map((r) => r.spaces).filter((s) => s > 0);
-  const unit = positive.length ? Math.min(8, Math.max(2, Math.min(...positive))) : 4;
-  let best = { depth: 0, line: 1 };
-  for (const r of rows) {
-    const depth = r.tabs + Math.floor(r.spaces / unit);
-    if (depth > best.depth) best = { depth, line: r.line };
-  }
-  return best;
-}
-
 function scanFile(path: string, content: string, lang: Lang): Scanned {
   const { lines, code, bare, comment } = splitCode(content, lang);
   const codeText = code.join('\n');
@@ -534,13 +716,21 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
   const loc = lines.length;
   const codeLoc = code.filter((l) => l.trim() !== '').length;
   const branches = (bareText.match(BRANCH_RE[lang]) ?? []).length;
-  const { depth, line: depthLine } = indentDepth(code);
+  const { depth, line: depthLine } = controlDepth(lang, bare, bareText, lineAt);
   const issues: Issue[] = [];
   let silent = 0;
 
-  // Empty / swallowed catch (+18 once).
-  const catches = scanCatchBlocks(lang, bare, bareText, lineAt);
-  if (catches.length > 0) silent += ROT.EMPTY_CATCH;
+  // Hard-coded credentials (+20 once). The value itself is never echoed into the finding.
+  const secretLine = lines.findIndex((l) => SECRET_RE.test(l));
+  if (secretLine >= 0) {
+    silent += ROT.SECRET;
+    issues.push(issue('secret', secretLine + 1, `Line ${secretLine + 1}: Hard-coded credential (API key or private key format) is committed to the repository.`));
+  }
+
+  // Catch blocks: empty (+18 once) or returning a placeholder (+6 once). Documented ignores add nothing.
+  const catches = scanCatchBlocks(lang, bare, bareText, comment, lineAt);
+  if (catches.some((c) => c.kind === 'empty-catch')) silent += ROT.EMPTY_CATCH;
+  else if (catches.some((c) => c.kind === 'default-catch')) silent += ROT.SOFT_CATCH;
   issues.push(...catches);
 
   // Weak typing: `any`, @ts-ignore, eval (+10 once).
@@ -553,62 +743,57 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
     const ignores = firstLine(/@ts-(?:ignore|nocheck)\b/, comment);
     if (ignores.count > 0) {
       weak = true;
-      issues.push({
-        severity: 85,
-        line: ignores.line,
-        text: `Line ${ignores.line}: @ts-ignore suppresses type checking${ignores.count > 1 ? ` (${ignores.count} places)` : ''}.`,
-      });
+      issues.push(issue('ts-ignore', ignores.line, `Line ${ignores.line}: @ts-ignore suppresses type checking${ignores.count > 1 ? ` (${ignores.count} places)` : ''}.`));
     }
     if (/\.tsx?$/i.test(path)) {
       const anyRe = /(?::\s*any\b|\bas\s+any\b|<any>|\bany\[\])/g;
       const hits = bare.flatMap((l, i) => (l.match(anyRe) ?? []).map(() => i + 1));
       if (hits.length >= 3) {
         weak = true;
-        issues.push({ severity: 80, line: hits[0], text: `Line ${hits[0]}: \`any\` is used ${hits.length} times, which disables type checking.` });
+        issues.push(issue('any', hits[0], `Line ${hits[0]}: \`any\` is used ${hits.length} times, which disables type checking.`));
       }
+    }
+    // Raw HTML injection is an XSS risk unless the value is sanitized first.
+    const html = firstLine(/\bdangerouslySetInnerHTML\b|\.(?:inner|outer)HTML\s*=(?!=)|\bdocument\.write\s*\(|\.insertAdjacentHTML\s*\(/, bare);
+    if (html.count > 0) {
+      issues.push(issue('unsafe-html', html.line, `Line ${html.line}: Raw HTML is injected into the page${html.count > 1 ? ` (${html.count} places)` : ''}; unsanitized input here is an XSS risk.`));
     }
   }
   if (lang !== 'go') {
-    const evals = firstLine(lang === 'py' ? /\b(?:eval|exec)\s*\(/ : /\beval\s*\(/, bare);
+    const evals = firstLine(lang === 'py' ? /\b(?:eval|exec)\s*\(/ : /\beval\s*\(|\bnew\s+Function\s*\(/, bare);
     if (evals.count > 0) {
       weak = true;
-      issues.push({ severity: 90, line: evals.line, text: `Line ${evals.line}: eval() runs dynamic code and is unsafe.` });
+      const call = /\bnew\s+Function\b/.test(bare[evals.line - 1]) ? 'new Function()' : lang === 'py' && /\bexec\s*\(/.test(bare[evals.line - 1]) ? 'exec()' : 'eval()';
+      issues.push(issue('eval', evals.line, `Line ${evals.line}: ${call} runs dynamic code and is unsafe.`));
     }
   }
   if (weak) silent += ROT.WEAK_TYPING;
 
-  // Technical-debt comments (+8 each; the two earliest are reported).
-  let reported = 0;
+  // Technical-debt comments (+8 each). mergeByKind folds them into one finding with every line.
   comment.forEach((text, i) => {
     const m = DEBT_RE.exec(text);
     if (!m) return;
     silent += ROT.DEBT_COMMENT;
-    if (reported++ >= 2) return;
     const note = text.trim().replace(/\s+/g, ' ').slice(0, 70);
-    issues.push({
-      severity: 70,
-      line: i + 1,
-      text: `Line ${i + 1}: ${m[0].toUpperCase()} comment marks unresolved technical debt: "${note}".`,
-    });
+    issues.push(issue('debt', i + 1, `Line ${i + 1}: ${m[0].toUpperCase()} comment marks unresolved technical debt: "${note}".`));
   });
 
   const long = longestFunction(lang, bare, bareText, offsets, lineAt);
   if (long) {
-    issues.push({
-      severity: 60,
-      line: long.line,
-      text: `Line ${long.line}: ${long.name}() spans ${long.length} lines; split it into smaller functions.`,
-    });
+    issues.push(issue('long-function', long.line, `Line ${long.line}: ${long.name}() spans ${long.length} lines; split it into smaller functions.`));
   }
-  if (depth >= 5) {
-    issues.push({ severity: 50, line: depthLine, text: `Line ${depthLine}: Nesting reaches ${depth} levels deep.` });
+  if (depth >= DEEP_NESTING) {
+    issues.push(
+      issue('deep-nesting', depthLine, `Line ${depthLine}: Control flow is nested ${depth} levels deep (if/loop/try inside each other).`, depth > DEEP_NESTING ? SEVERITY['deep-nesting'] : 60),
+    );
   }
-  if (branches >= 15) {
-    issues.push({ severity: 40, line: null, text: `High cyclomatic complexity (${branches} branches across ${loc} lines).` });
+  // Density, not a raw count: 20 branches spread over 700 lines is not complex.
+  if (branches >= 10 && branches / Math.max(codeLoc, 1) >= HIGH_BRANCH_DENSITY) {
+    issues.push(issue('branching', null, `High branching density: ${branches} decision points across ${codeLoc} code lines.`));
   }
 
   const name = path.split('/').pop() ?? path;
-  return { path, name, lang, lines, codeText, loc, codeLoc, branches, depth, issues, silent };
+  return { path, name, lang, lines, codeText, loc, codeLoc, branches, depth, issues: mergeByKind(issues), silent };
 }
 
 // ============================================================================
@@ -638,6 +823,44 @@ function resolveEdges(files: Scanned[]): RepoEdge[] {
   return [...edges.values()].sort((a, b) => (a.from + a.to < b.from + b.to ? -1 : 1));
 }
 
+/**
+ * Copy-paste across the analyzed files: the first block of DUPLICATE_WINDOW normalized lines that also
+ * appears elsewhere (another file, or a non-overlapping spot in the same file). Adds one finding and
+ * ROT.DUPLICATE per affected file. Short lines, braces and imports are ignored so boilerplate never matches.
+ */
+// ponytail: exact-match sliding window over <= 22 files. Upgrade path: token-based clone detection.
+function markDuplicates(files: Scanned[]): void {
+  // Meaningful lines only, keeping their real line numbers: `try {`, `} catch {` and blank lines are
+  // skipped instead of breaking the window, so two copies of a try/catch block still line up.
+  const meaningful = files.map((f) =>
+    f.codeText.split('\n').flatMap((l, i) => {
+      const text = l.trim().replace(/\s+/g, ' ');
+      return text.length >= 10 && !/^(?:import|export \{|export \* from|from |require\(|\}|\{|\)|\]|<\/)/.test(text) ? [{ text, line: i + 1 }] : [];
+    }),
+  );
+  const seen = new Map<string, Array<{ file: number; line: number; end: number }>>();
+  meaningful.forEach((rows, file) => {
+    for (let i = 0; i + DUPLICATE_WINDOW <= rows.length; i++) {
+      const window = rows.slice(i, i + DUPLICATE_WINDOW);
+      const key = window.map((row) => row.text).join('\n');
+      seen.set(key, [...(seen.get(key) ?? []), { file, line: window[0].line, end: window[DUPLICATE_WINDOW - 1].line }]);
+    }
+  });
+  const reported = new Set<number>();
+  for (const spots of seen.values()) {
+    for (const spot of spots) {
+      if (reported.has(spot.file)) continue;
+      const other = spots.find((o) => o.file !== spot.file || o.line > spot.end || o.end < spot.line);
+      if (!other) continue;
+      reported.add(spot.file);
+      const f = files[spot.file];
+      const where = other.file === spot.file ? `line ${other.line} of this file` : `${files[other.file].path} (line ${other.line})`;
+      f.issues = mergeByKind([...f.issues, issue('duplicate', spot.line, `Line ${spot.line}: The same ${DUPLICATE_WINDOW}+ line block also appears in ${where}; a fix in one copy will miss the other.`)]);
+      f.silent += ROT.DUPLICATE;
+    }
+  }
+}
+
 function rotScore(f: Scanned, degree: number): number {
   const volume =
     f.codeLoc > ROT.VOLUME_FREE_LOC
@@ -646,40 +869,41 @@ function rotScore(f: Scanned, degree: number): number {
   const nesting = Math.min(ROT.NESTING_MAX, Math.max(0, f.depth - ROT.NESTING_FREE_DEPTH) * ROT.NESTING_PER_LEVEL);
   const branching = Math.min(ROT.BRANCH_MAX, (f.branches / Math.max(f.codeLoc, 1)) * 100 * ROT.BRANCH_PER_PERCENT);
   const silent = Math.min(ROT.SILENT_MAX, f.silent);
-  const coupling = Math.min(ROT.COUPLING_MAX, degree * ROT.COUPLING_PER_LINK);
+  // Being imported a lot is only a risk when there is logic to break; type and constant files get 0.
+  const coupling = f.branches > 0 ? Math.min(ROT.COUPLING_MAX, degree * ROT.COUPLING_PER_LINK) : 0;
   return Math.max(0, Math.min(100, Math.round(volume + nesting + branching + silent + coupling)));
 }
 
-/** Importers sit on the left, imported modules on the right; four columns at most. */
-function layout(files: Scanned[], edges: RepoEdge[]): Map<string, { x: number; y: number }> {
-  const n = files.length;
-  const level = new Map(files.map((f) => [f.path, 0]));
-  for (let pass = 0; pass < n; pass++) {
-    let changed = false;
-    for (const e of edges) {
-      const next = Math.min(n - 1, (level.get(e.from) ?? 0) + 1);
-      if ((level.get(e.to) ?? 0) < next) {
-        level.set(e.to, next);
-        changed = true;
+const ENTRY_RE = /(?:^|\/)(?:page|route|layout|main|index|server|app)\.[^/]+$|(?:^|\/)(?:controllers?|routes?|routers?|pages)\/|\.(?:controller|routes?)\.[^/]+$/i;
+
+/**
+ * The key files the workspace shows first: the worst hotspots, the files most of the codebase
+ * depends on, and entry points, then the best remaining mix of rot and coupling. Deterministic.
+ */
+function pickFeatured(nodes: Array<{ path: string; rot: number }>, degree: Map<string, { in: number; out: number }>): Set<string> {
+  if (nodes.length <= FEATURED_FILES) return new Set(nodes.map((n) => n.path));
+  const deg = (path: string) => degree.get(path) ?? { in: 0, out: 0 };
+  const byPath = (a: { path: string }, b: { path: string }) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  const hotspots = nodes.filter((n) => n.rot > 0).sort((a, b) => b.rot - a.rot || byPath(a, b));
+  const hubs = nodes.filter((n) => deg(n.path).in > 0).sort((a, b) => deg(b.path).in - deg(a.path).in || b.rot - a.rot || byPath(a, b));
+  const entries = nodes.filter((n) => ENTRY_RE.test(n.path)).sort((a, b) => deg(b.path).out - deg(a.path).out || byPath(a, b));
+  const rest = [...nodes].sort((a, b) => b.rot + 4 * (deg(b.path).in + deg(b.path).out) - (a.rot + 4 * (deg(a.path).in + deg(a.path).out)) || byPath(a, b));
+
+  const picked = new Set<string>();
+  const take = (list: Array<{ path: string }>, quota: number) => {
+    for (const { path } of list) {
+      if (quota <= 0 || picked.size >= FEATURED_FILES) return;
+      if (!picked.has(path)) {
+        picked.add(path);
+        quota--;
       }
     }
-    if (!changed) break;
-  }
-  const maxLevel = Math.max(0, ...level.values());
-  const ordered = [...files].sort((a, b) => (a.path < b.path ? -1 : 1));
-  const columns: string[][] = [[], [], [], []];
-  ordered.forEach((f, i) => {
-    // Without any import flow there is nothing to layer; spread evenly instead of one tall column.
-    const col = edges.length === 0 ? i % 4 : maxLevel === 0 ? 0 : Math.round(((level.get(f.path) ?? 0) * 3) / maxLevel);
-    columns[col].push(f.path);
-  });
-  const tallest = Math.max(...columns.map((c) => c.length));
-  const positions = new Map<string, { x: number; y: number }>();
-  columns.forEach((paths, col) => {
-    const top = ROW_TOP + ((tallest - paths.length) * ROW_GAP) / 2;
-    paths.forEach((path, row) => positions.set(path, { x: COLUMN_X[col], y: Math.round(top + row * ROW_GAP) }));
-  });
-  return positions;
+  };
+  take(hotspots, 14);
+  take(hubs, 8);
+  take(entries, 4);
+  take(rest, FEATURED_FILES);
+  return picked;
 }
 
 /** 30-45 lines centred on the most severe finding, or the top of the file. */
@@ -754,15 +978,20 @@ function listNames(names: string[], max = 3): string {
   return shown.length > 1 ? `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}` : shown[0] ?? '';
 }
 
-const RECOMMENDATIONS: Record<number, (line: number | null) => string> = {
-  100: (l) => `Log or rethrow the error caught at line ${l} so failures reach the caller instead of disappearing.`,
-  90: (l) => `Replace the eval() call at line ${l} with explicit parsing or a lookup table.`,
-  85: (l) => `Remove the type-check suppression at line ${l} and fix the underlying type error.`,
-  80: (l) => `Replace the \`any\` types starting at line ${l} with concrete types or interfaces.`,
-  70: (l) => `Resolve the debt comment at line ${l}, or move it into a tracked issue, before changing this module.`,
-  60: (l) => `Split the long function at line ${l} into smaller helpers, each with a focused test.`,
-  50: (l) => `Flatten the nesting at line ${l} with early returns or extracted functions.`,
-  40: () => 'Extract the branching logic into small, well-named functions to lower cyclomatic complexity.',
+const RECOMMENDATIONS: Record<IssueKind, (line: number | null) => string> = {
+  secret: (l) => `Move the credential at line ${l} into an environment variable and rotate it, because anyone with repository access can read it.`,
+  eval: (l) => `Replace the dynamic code execution at line ${l} with explicit parsing or a lookup table.`,
+  'empty-catch': (l) => `Log or rethrow the error caught at line ${l} so failures reach the caller instead of disappearing.`,
+  'unsafe-html': (l) => `Sanitize the HTML injected at line ${l} (for example with DOMPurify), or render it as text.`,
+  'ts-ignore': (l) => `Remove the type-check suppression at line ${l} and fix the underlying type error.`,
+  'deep-nesting': (l) => `Flatten the nesting at line ${l} with early returns or by extracting the inner block into a function.`,
+  any: (l) => `Replace the \`any\` types starting at line ${l} with concrete types or interfaces.`,
+  'long-function': (l) => `Split the long function at line ${l} into smaller helpers, each with a focused test.`,
+  debt: (l) => `Resolve the debt comment at line ${l}, or move it into a tracked issue, before changing this module.`,
+  duplicate: (l) => `Extract the block duplicated at line ${l} into one shared helper so a fix only has to be made once.`,
+  'default-catch': (l) => `Log the error caught at line ${l} before returning the placeholder, or return an explicit error result.`,
+  branching: () => 'Extract the branching logic into small, well-named functions to lower cyclomatic complexity.',
+  'ignored-catch': (l) => `Narrow the deliberately ignored catch at line ${l} to the one error type that is expected.`,
 };
 
 /** Deterministic explanation used when no AI provider is configured, or when it fails. */
@@ -782,15 +1011,16 @@ function fallbackExplanation(f: Scanned, degree: { in: number; out: number }, sc
 
   const density = f.codeLoc ? f.branches / f.codeLoc : 0;
   const level = density < 0.08 ? 'low' : density < 0.18 ? 'moderate' : 'high';
-  const complexity = `Branching complexity is ${level}: ${f.branches} decision point${f.branches === 1 ? '' : 's'} across ${f.codeLoc} code lines in a ${f.loc}-line file, nested up to ${f.depth} level${f.depth === 1 ? '' : 's'} deep.`;
+  const complexity = `Branching complexity is ${level}: ${f.branches} decision point${f.branches === 1 ? '' : 's'} across ${f.codeLoc} code lines in a ${f.loc}-line file, with control flow nested up to ${f.depth} level${f.depth === 1 ? '' : 's'}.`;
   const ranked = [...f.issues].sort((a, b) => b.severity - a.severity || (a.line ?? 0) - (b.line ?? 0));
-  const findings = ranked.slice(0, 3).map((issue) => issue.text);
-  if (findings.length === 0) findings.push('No swallowed errors, eval() calls, type suppressions, or debt comments were detected.');
-  if (findings.length < 2) findings.push(complexity);
+  const findings = ranked.slice(0, 3).map((item) => item.text);
+  if (findings.length === 0) findings.push('No swallowed errors, hard-coded secrets, eval() calls, type suppressions, or debt comments were detected.');
+  // Never restate branching when a branching finding is already shown; use the dependency fact instead.
+  if (findings.length < 2) findings.push(ranked.some((item) => item.kind === 'branching') ? reach : complexity);
 
   const top = ranked[0];
   const recommendation = top
-    ? (RECOMMENDATIONS[top.severity] ?? RECOMMENDATIONS[40])(top.line)
+    ? RECOMMENDATIONS[top.kind](top.line)
     : degree.in > 3
       ? `Keep the exported contract of ${f.name} stable and add contract tests before changing it, because ${degree.in} files depend on it.`
       : score < 30
@@ -799,22 +1029,42 @@ function fallbackExplanation(f: Scanned, degree: { in: number; out: number }, sc
   return { summary, findings, recommendation };
 }
 
-function snippetStart(total: number, anchor: number | null): number {
-  const start = anchor !== null ? Math.max(1, anchor - 12) : 1;
-  const end = Math.min(total, start + SNIPPET_LINES - 1);
-  return Math.max(1, Math.min(start, end - SNIPPET_LINES + 1));
-}
+const EVIDENCE_MAX_LINES = 75;
 
-/** Numbered source evidence for the model: the file header plus the window around the top finding. */
+/**
+ * Numbered source evidence for the model: the file header plus a window around each of the top three
+ * findings, so the model sees every problem it is told about instead of only the most severe one.
+ */
 function numberedEvidence(f: Scanned): string {
-  const anchor = [...f.issues].sort((a, b) => b.severity - a.severity).find((issue) => issue.line !== null)?.line ?? null;
-  const start = snippetStart(f.lines.length, anchor);
-  const fmt = (from: number, count: number) =>
-    f.lines
-      .slice(from - 1, from - 1 + count)
-      .map((line, i) => `${from + i}| ${line.length > 160 ? `${line.slice(0, 160)}…` : line}`)
-      .join('\n');
-  return start > 20 ? `${fmt(1, 20)}\n…\n${fmt(start, SNIPPET_LINES)}` : fmt(1, start - 1 + SNIPPET_LINES);
+  const total = f.lines.length;
+  const anchors = [...f.issues]
+    .sort((a, b) => b.severity - a.severity)
+    .flatMap((item) => (item.line === null ? [] : [item.line]))
+    .slice(0, 3);
+  const ranges: Array<[number, number]> = anchors.length
+    ? [[1, Math.min(total, 15)], ...anchors.map((a): [number, number] => [Math.max(1, a - 6), Math.min(total, a + 12)])]
+    : [[1, Math.min(total, SNIPPET_LINES)]];
+  ranges.sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const [from, to] of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && from <= last[1] + 1) last[1] = Math.max(last[1], to);
+    else merged.push([from, to]);
+  }
+  let budget = EVIDENCE_MAX_LINES;
+  const parts: string[] = [];
+  for (const [from, to] of merged) {
+    if (budget <= 0) break;
+    const end = Math.min(to, from + budget - 1);
+    budget -= end - from + 1;
+    parts.push(
+      f.lines
+        .slice(from - 1, end)
+        .map((line, i) => `${from + i}| ${line.length > 160 ? `${line.slice(0, 160)}…` : line}`)
+        .join('\n'),
+    );
+  }
+  return parts.join('\n…\n');
 }
 
 interface ExplanationInput {
@@ -841,6 +1091,9 @@ function explanationPrompt(files: ExplanationInput[], language: string): string 
     'Return JSON shaped exactly as {"files":[{"id":0,"summary":"...","findings":["..."],"recommendation":"..."}]} with one entry per input file and the same ids.',
     '- summary: 1-2 sentences on what the module does in this application and what depends on it. Name concrete responsibilities (for example "validates the JWT before a movie rating is saved"), never line counts.',
     '- findings: 2-3 specific observations about weaknesses, security gaps, or error handling. Start each with "Line N:" or "Line N-M:" when the numbered source supports it, and only cite lines you can see. If the file is healthy, say concretely what it does well.',
+    '- Static findings are heuristics, not facts. Check each one against the numbered source and drop it if the code does not support it.',
+    '- A catch/except that runs a fallback (retry, alternative parsing, a default with a reason) or has a comment explaining why the error is ignored is deliberate error handling. Do not call it swallowed unless the source shows a real failure being hidden.',
+    '- Cover different kinds of weakness (error handling, control-flow complexity, duplication, security, typing, testability) rather than repeating one kind. Never report the same problem twice in one file.',
     '- recommendation: one concrete, actionable fix that names the function or line it applies to.',
     '- Do not invent frameworks, endpoints, data, or vulnerabilities the evidence does not show. Do not restate raw metrics as findings.',
     `- Write summary, findings, and recommendation in ${language}.`,
@@ -1100,25 +1353,26 @@ export async function analyzeRepository(repoUrl: string, options: AnalyzeOptions
   const defaultBranch = meta.default_branch;
   const title = typeof meta.full_name === 'string' && meta.full_name ? meta.full_name : `${owner}/${repo}`;
 
-  const tree = await githubJson<{ tree?: TreeEntry[] }>(
+  const tree = await githubJson<{ tree?: TreeEntry[]; truncated?: unknown }>(
     `/repos/${owner}/${repo}/git/trees/${encodePath(defaultBranch)}?recursive=1`,
     ctx,
   );
   if (!Array.isArray(tree.tree)) throw new IngestError('GITHUB_API_ERROR', 'GitHub tree response is malformed');
-  const selected = selectFiles(tree.tree);
+  const { selected, coverage: selection } = selectFiles(tree.tree);
   if (selected.length === 0) {
     throw new IngestError('NO_CODE_FILES_FOUND', 'No supported source files found in this repository', {
       treeEntries: tree.tree.length,
     });
   }
 
-  const fetched = await Promise.all(selected.map((entry) => fetchRaw(owner, repo, defaultBranch, entry.path, ctx)));
+  const fetched = await mapLimit(selected, FETCH_CONCURRENCY, (entry) => fetchRaw(owner, repo, defaultBranch, entry.path, ctx));
   const files: Scanned[] = [];
   let rateLimited = false;
   selected.forEach((entry, i) => {
     const result = fetched[i];
     if (!result.ok) {
       rateLimited ||= result.status === 429;
+      selection.skipped.unreadable++;
       return;
     }
     const lang = langOf(entry.path);
@@ -1129,16 +1383,18 @@ export async function analyzeRepository(repoUrl: string, options: AnalyzeOptions
     throw new IngestError('NO_CODE_FILES_FOUND', 'No source files could be fetched', { selected: selected.length });
   }
 
+  markDuplicates(files);
   const edges = resolveEdges(files);
   const degree = new Map<string, { in: number; out: number }>(files.map((f) => [f.path, { in: 0, out: 0 }]));
   for (const e of edges) {
     degree.get(e.from)!.out++;
     degree.get(e.to)!.in++;
   }
-  const positions = layout(files, edges);
+  const positions = layoutGraph(files.map((f) => f.path), edges);
 
-  const staticNodes: Array<RepoNode & { staticFindings: string[] }> = files
-    .map((f): RepoNode & { staticFindings: string[] } => {
+  type StaticNode = Omit<RepoNode, 'featured' | 'explainedBy'> & { staticFindings: string[] };
+  const staticNodes: StaticNode[] = files
+    .map((f): StaticNode => {
       const d = degree.get(f.path)!;
       const score = rotScore(f, d.in + d.out);
       const ranked = [...f.issues].sort((a, b) => b.severity - a.severity || (a.line ?? 0) - (b.line ?? 0));
@@ -1160,8 +1416,9 @@ export async function analyzeRepository(repoUrl: string, options: AnalyzeOptions
     });
 
   const byPath = new Map(files.map((f) => [f.path, f]));
+  const featured = pickFeatured(staticNodes, degree);
   const explanations = await requestBatchExplanation(
-    staticNodes.map((node): ExplanationInput => {
+    staticNodes.filter((node) => featured.has(node.path)).map((node): ExplanationInput => {
       const f = byPath.get(node.path)!;
       return {
         path: node.path,
@@ -1180,14 +1437,16 @@ export async function analyzeRepository(repoUrl: string, options: AnalyzeOptions
     ctx.signal,
   );
   // Per field: whatever the model returned wins, the static explanation fills any gap.
-  const nodes: RepoNode[] = staticNodes.map(({ staticFindings: _staticFindings, ...node }) => {
+  const nodes: RepoNode[] = staticNodes.map(({ staticFindings: _staticFindings, ...node }): RepoNode => {
     const ai = explanations?.get(node.path);
+    const base = { ...node, featured: featured.has(node.path) };
     return ai
-      ? { ...node, summary: ai.summary ?? node.summary, findings: ai.findings ?? node.findings, recommendation: ai.recommendation ?? node.recommendation }
-      : node;
+      ? { ...base, explainedBy: 'ai', summary: ai.summary ?? node.summary, findings: ai.findings ?? node.findings, recommendation: ai.recommendation ?? node.recommendation }
+      : { ...base, explainedBy: 'static' };
   }).sort((a, b) => (a.path < b.path ? -1 : 1));
 
   const weight = nodes.reduce((sum, n) => sum + Math.max(n.loc, 1), 0);
   const overallRot = Math.round(nodes.reduce((sum, n) => sum + n.rot * Math.max(n.loc, 1), 0) / weight);
-  return { title, defaultBranch, rotSummary: `${overallRot}% infected`, overallRot, nodes, edges };
+  const coverage: RepoCoverage = { ...selection, analyzed: nodes.length, featured: featured.size, treeTruncated: tree.truncated === true };
+  return { title, defaultBranch, rotSummary: `${overallRot}% infected`, overallRot, nodes, edges, coverage };
 }

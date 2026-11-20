@@ -103,7 +103,12 @@ describe('analyzeRepository', () => {
     const gh = fakeGitHub(SHOP);
     const result = await analyzeRepository('Acme/Shop', { token: '', fetchImpl: gh.impl });
 
-    expect(Object.keys(result).sort()).toEqual(['defaultBranch', 'edges', 'nodes', 'overallRot', 'rotSummary', 'title']);
+    expect(Object.keys(result).sort()).toEqual(['coverage', 'defaultBranch', 'edges', 'nodes', 'overallRot', 'rotSummary', 'title']);
+    // 3 analyzed + the test file, node_modules file and config file; .d.ts and README are not source.
+    expect(result.coverage).toEqual({
+      totalFiles: 6, analyzed: 3, featured: 3, fileLimit: 400, treeTruncated: false,
+      skipped: { tests: 1, config: 1, generated: 1, tooLarge: 0, overLimit: 0, unreadable: 0 },
+    });
     expect(result.title).toBe('acme/shop');
     expect(result.defaultBranch).toBe('main');
     expect(result.rotSummary).toBe(`${result.overallRot}% infected`);
@@ -111,7 +116,9 @@ describe('analyzeRepository', () => {
     // Tests, node_modules, config and .d.ts files are filtered out.
     expect(result.nodes.map((n) => n.path)).toEqual(['src/billing/charge.ts', 'src/lib/db.ts', 'src/server.ts']);
     for (const node of result.nodes) {
-      expect(Object.keys(node).sort()).toEqual(['code', 'findings', 'id', 'lastCommit', 'loc', 'name', 'path', 'recommendation', 'rot', 'summary', 'x', 'y']);
+      expect(Object.keys(node).sort()).toEqual(['code', 'explainedBy', 'featured', 'findings', 'id', 'lastCommit', 'loc', 'name', 'path', 'recommendation', 'rot', 'summary', 'x', 'y']);
+      expect(node.featured).toBe(true); // small repositories show every file
+      expect(node.explainedBy).toBe('static'); // no AI provider in unit tests
       expect(node.id).toBe(node.path);
       expect(node.rot).toBeGreaterThanOrEqual(0);
       expect(node.rot).toBeLessThanOrEqual(100);
@@ -160,15 +167,47 @@ describe('analyzeRepository', () => {
     }
   });
 
-  it('reads at most 22 files, preferring core folders, and skips oversized ones', async () => {
+  it('analyzes every eligible file, marks 30 key files, and skips oversized ones', async () => {
     const many: Files = { 'scripts/outside.ts': 'export const a = 1;\n', 'src/huge.ts': 'export const b = 1;\n' };
     for (let i = 0; i < 40; i++) many[`src/f${String(i).padStart(2, '0')}.ts`] = `export const v${i} = ${i};\n`;
+    many['src/deep/nested/hot.ts'] = 'export function hot() { try { run(); } catch {} }\n';
     const gh = fakeGitHub(many, { sizes: { 'src/huge.ts': 900_000 } });
     const result = await analyzeRepository('Acme/Shop', { token: '', fetchImpl: gh.impl });
-    expect(result.nodes).toHaveLength(22);
-    expect(result.nodes.some((n) => n.path === 'scripts/outside.ts')).toBe(false);
+    expect(result.nodes).toHaveLength(42); // 40 + outside + hot; only huge is skipped
+    expect(result.nodes.some((n) => n.path === 'scripts/outside.ts')).toBe(true);
     expect(result.nodes.some((n) => n.path === 'src/huge.ts')).toBe(false);
-    expect(gh.calls.filter((c) => c.url.startsWith('https://raw.githubusercontent.com/')).length).toBe(22);
+    expect(result.coverage.skipped.tooLarge).toBe(1);
+    expect(gh.calls.filter((c) => c.url.startsWith('https://raw.githubusercontent.com/')).length).toBe(42);
+    // The deeply nested hotspot is a key file even though shallow files come first in reading order.
+    expect(result.nodes.filter((n) => n.featured)).toHaveLength(30);
+    expect(result.nodes.find((n) => n.path === 'src/deep/nested/hot.ts')!.featured).toBe(true);
+    expect(result.coverage.featured).toBe(30);
+  });
+
+  it('stops at the 400-file budget and reports the rest as over the limit', async () => {
+    const many: Files = {};
+    for (let i = 0; i < 405; i++) many[`src/m${String(i).padStart(3, '0')}.ts`] = `export const v${i} = ${i};\n`;
+    const gh = fakeGitHub(many);
+    const result = await analyzeRepository('Acme/Shop', { token: '', fetchImpl: gh.impl });
+    expect(result.nodes).toHaveLength(400);
+    expect(result.coverage).toMatchObject({ totalFiles: 405, analyzed: 400, skipped: { overLimit: 5 } });
+    expect(gh.calls.filter((c) => c.url.startsWith('https://raw.githubusercontent.com/')).length).toBe(400);
+  });
+
+  it('sends only the key files to the AI provider and labels the rest as static', async () => {
+    const many: Files = {};
+    for (let i = 0; i < 40; i++) many[`src/f${String(i).padStart(2, '0')}.ts`] = `export const v${i} = ${i};\n`;
+    const sent: string[] = [];
+    vi.stubGlobal('fetch', (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sent.push(...[...String(init?.body).matchAll(/\\"path\\":\\"([^\\]+)\\"/g)].map((m) => m[1]));
+      return Response.json({ candidates: [{ content: { parts: [{ text: '{"files":[]}' }] } }] });
+    }) as typeof fetch);
+    vi.stubEnv('GEMINI_API_KEY', 'gem-key');
+    const result = await analyzeRepository('Acme/Shop', { token: '', fetchImpl: fakeGitHub(many).impl });
+    const featured = result.nodes.filter((n) => n.featured).map((n) => n.path).sort();
+    expect(featured).toHaveLength(30);
+    expect([...sent].sort()).toEqual(featured);
+    expect(result.nodes.filter((n) => !n.featured).every((n) => n.explainedBy === 'static')).toBe(true);
   });
 
   it('analyzes Python: swallowed except and relative-import edges', async () => {
@@ -238,5 +277,117 @@ describe('analyzeRepository', () => {
   it('fails clearly when no supported source file exists', async () => {
     const docsOnly = analyzeRepository('Acme/Shop', { token: '', fetchImpl: fakeGitHub({ 'README.md': '# hi' }).impl });
     await expect(docsOnly).rejects.toMatchObject({ code: 'NO_CODE_FILES_FOUND', status: 422 });
+  });
+});
+
+describe('static scanner fairness', () => {
+  beforeEach(() => {
+    for (const name of ['GEMINI_API_KEY', 'OPENAI_API_KEY', 'OPENCODE_MODEL', 'OPENCODE_BASE_URL', 'OPENCODE_CHAT_COMPLETIONS_URL']) vi.stubEnv(name, '');
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  const analyze = async (files: Files) => {
+    const result = await analyzeRepository('Acme/Shop', { token: '', fetchImpl: fakeGitHub(files).impl });
+    return Object.fromEntries(result.nodes.map((n) => [n.path, n]));
+  };
+
+  it('treats fallback and documented catches as handled, and merges repeated catches into one finding', async () => {
+    const nodes = await analyze({
+      'src/fallback.ts': [
+        'export async function read(res: Response) {', // 1
+        '  try {', // 2
+        '    return await res.json();', // 3
+        '  } catch {', // 4
+        '    return await res.text();', // 5  fallback: handled
+        '  }', // 6
+        '}', // 7
+        'export function parse(s: string) {', // 8
+        '  try {', // 9
+        '    return JSON.parse(s);', // 10
+        '  } catch (e) {', // 11
+        '    // partial chunk, the next one completes it', // 12  documented ignore
+        '  }', // 13
+        '}', // 14
+      ].join('\n'),
+      'src/silent.ts': 'export function a() { try { x(); } catch {} }\nexport function b() { try { y(); } catch {} }\nexport function c() { try { return z(); } catch { return null; } }\n',
+    });
+    const fallback = nodes['src/fallback.ts'].findings.join('\n');
+    expect(fallback).not.toMatch(/Empty catch|swallow/);
+    expect(fallback).toContain('Line 11: catch block deliberately ignores the error');
+
+    const silent = nodes['src/silent.ts'].findings;
+    expect(silent[0]).toBe('Line 1: Empty catch block swallows exceptions silently (2 places: lines 1, 2).');
+    expect(silent.some((f) => f.startsWith('Line 3: catch block returns a placeholder value'))).toBe(true);
+    expect(nodes['src/silent.ts'].rot).toBeGreaterThan(nodes['src/fallback.ts'].rot);
+  });
+
+  it('measures control-flow nesting, not JSX or object indentation', async () => {
+    const jsx = [
+      'export function Page() {',
+      '  return (',
+      '    <main>',
+      '      <section>',
+      '        <div>',
+      '          <ul>',
+      '            <li>',
+      '              <span>{"deep markup"}</span>',
+      '            </li>',
+      '          </ul>',
+      '        </div>',
+      '      </section>',
+      '    </main>',
+      '  );',
+      '}',
+    ].join('\n');
+    const loops = [
+      'export function walk(rows: number[][]) {', // 1
+      '  for (const row of rows) {', // 2
+      '    for (const cell of row) {', // 3
+      '      if (cell > 0) {', // 4
+      '        try {', // 5
+      '          if (cell > 9) {', // 6
+      '            log(cell);', // 7
+      '          }', // 8
+      '        } catch (e) {', // 9
+      '          throw e;', // 10
+      '        }', // 11
+      '      }', // 12
+      '    }', // 13
+      '  }', // 14
+      '}', // 15
+    ].join('\n');
+    const nodes = await analyze({ 'src/page.tsx': jsx, 'src/walk.ts': loops });
+    expect(nodes['src/page.tsx'].findings.join('\n')).not.toMatch(/Control flow is nested/);
+    expect(nodes['src/page.tsx'].findings.join('\n')).toContain('control flow nested up to 0 levels');
+    expect(nodes['src/page.tsx'].rot).toBe(0);
+    expect(nodes['src/walk.ts'].findings[0]).toBe('Line 6: Control flow is nested 5 levels deep (if/loop/try inside each other).');
+  });
+
+  it('gives type-only modules no rot for being widely imported', async () => {
+    const files: Files = { 'src/types.ts': 'export type User = { id: string; name: string };\nexport type Role = "admin" | "user";\n' };
+    for (let i = 0; i < 6; i++) files[`src/use${i}.ts`] = `import type { User } from './types';\nexport const f${i} = (u: User) => u.id;\n`;
+    const nodes = await analyze(files);
+    expect(nodes['src/types.ts'].rot).toBe(0);
+  });
+
+  it('reports hard-coded credentials without echoing the value, and copy-pasted blocks across files', async () => {
+    const key = `sk-${'a1B2c3D4'.repeat(5)}`;
+    const shared = [
+      'const encoder = new TextEncoder();',
+      'const decoder = new TextDecoder();',
+      'const reader = response.body.getReader();',
+      'let buffer = "" + decoder.decode(new Uint8Array());',
+      'controller.enqueue(encoder.encode(buffer));',
+      'controller.close(); reader.releaseLock();',
+    ].join('\n');
+    const nodes = await analyze({
+      'src/client.ts': `const apiKey = "${key}";\nexport const headers = { Authorization: apiKey };\n`,
+      'src/a.ts': `export async function a(response: Response, controller: any) {\n${shared}\n}\n`,
+      'src/b.ts': `export async function b(response: Response, controller: any) {\n${shared}\n}\n`,
+    });
+    const client = nodes['src/client.ts'];
+    expect(client.findings[0]).toBe('Line 1: Hard-coded credential (API key or private key format) is committed to the repository.');
+    expect(JSON.stringify([client.findings, client.summary, client.recommendation])).not.toContain(key);
+    expect(nodes['src/a.ts'].findings.join('\n')).toContain('Line 2: The same 6+ line block also appears in src/b.ts (line 2)');
   });
 });

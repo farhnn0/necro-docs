@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, type CSSProperties, useEffect, useRef, useState } from 'react';
+import { FormEvent, type CSSProperties, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   Focus,
@@ -17,6 +17,8 @@ import {
   scrollyStep,
   workspaceTargetHref,
 } from '@/lib/conversion/helpers';
+import { GitHubRepoPickerModal } from '@/components/GitHubRepoPickerModal';
+import type { GitHubRepoSummary } from '@/lib/auth/github-app';
 
 const walkthroughSteps = [
   ['01 · Repository input', 'Paste any GitHub repository URL', 'Drop a public repository link. Necro-Docs fetches the file tree via REST API in milliseconds without cloning to disk.'],
@@ -50,12 +52,62 @@ function WorkspaceLink({ children, className = '' }: { children: React.ReactNode
   return <a href={workspaceTargetHref({ kind: 'preset', id: 'payment' })} className={`${className} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent`}>{children}</a>;
 }
 
+function GithubMark({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.69 1.25 3.35.96.1-.74.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z" />
+    </svg>
+  );
+}
+
 export default function Home() {
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [progress, setProgress] = useState(0);
   const frame = useRef<number | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisState>({ status: 'idle' });
   const analysisController = useRef<AbortController | null>(null);
+
+  const [installationId, setInstallationId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    return (
+      new URLSearchParams(window.location.search).get('installation_id') ||
+      window.sessionStorage.getItem('gh_installation_id')
+    );
+  });
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [githubRepos, setGithubRepos] = useState<GitHubRepoSummary[]>([]);
+  const [loadingRepos, setLoadingRepos] = useState(false);
+  const [reposError, setReposError] = useState<string | null>(null);
+  const repoInputRef = useRef<HTMLInputElement>(null);
+
+  const fetchGithubRepos = useCallback(async (instId: string) => {
+    setLoadingRepos(true);
+    setReposError(null);
+    try {
+      const res = await fetch(`/api/auth/github/repos?installation_id=${encodeURIComponent(instId)}`);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || 'Failed to fetch repositories');
+      }
+      setGithubRepos(data.repositories || []);
+    } catch (err) {
+      setReposError(err instanceof Error ? err.message : 'Failed to load repositories');
+    } finally {
+      setLoadingRepos(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!installationId) return;
+    window.sessionStorage.setItem('gh_installation_id', installationId);
+    void fetchGithubRepos(installationId);
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('github_installed')) {
+      setPickerOpen(true);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, [fetchGithubRepos, installationId]);
 
   useEffect(() => () => analysisController.current?.abort(), []);
 
@@ -84,10 +136,9 @@ export default function Home() {
     };
   }, []);
 
-  async function handleCustomRepo(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  const runAudit = useCallback(async (repoTarget: string) => {
     if (analysis.status === 'loading') return;
-    const value = new FormData(event.currentTarget).get('repository')?.toString().trim();
+    const value = repoTarget.trim();
     if (!value) {
       window.location.href = workspaceTargetHref({ kind: 'preset', id: 'payment' });
       return;
@@ -105,9 +156,13 @@ export default function Home() {
     const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (installationId) {
+        headers['x-github-installation-id'] = installationId;
+      }
       const response = await fetch('/api/ingest', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ repoUrl: value }),
         signal: controller.signal,
       });
@@ -131,6 +186,31 @@ export default function Home() {
       window.clearInterval(ticker);
       window.clearTimeout(timeout);
     }
+  }, [analysis.status, installationId]);
+
+  function handleCustomRepo(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const value = new FormData(event.currentTarget).get('repository')?.toString() || repoInputRef.current?.value || '';
+    void runAudit(value);
+  }
+
+  function handleOpenGithubPicker() {
+    if (installationId) {
+      setPickerOpen(true);
+      if (githubRepos.length === 0) {
+        void fetchGithubRepos(installationId);
+      }
+    } else {
+      window.location.href = '/api/auth/github/install';
+    }
+  }
+
+  function handleSelectGithubRepo(fullName: string) {
+    setPickerOpen(false);
+    if (repoInputRef.current) {
+      repoInputRef.current.value = fullName;
+    }
+    void runAudit(fullName);
   }
   return (
     <main className="min-h-screen bg-canvas font-sans text-ink">
@@ -148,9 +228,20 @@ export default function Home() {
           <h1 className="font-display text-4xl font-bold leading-[1.08] tracking-tight sm:text-6xl">Dissect legacy codebases<br />in minutes</h1>
           <p className="mx-auto mt-4 max-w-xl text-base leading-relaxed text-muted sm:text-lg">Map hidden module dependencies, surface structural decay scores, and interrogate fragile logic by voice before refactoring a single line.</p>
           <form onSubmit={handleCustomRepo} aria-label="Audit a GitHub repository" aria-busy={analysis.status === 'loading'} className="mx-auto mt-8 flex max-w-xl flex-col items-center gap-2 rounded-full border border-hairline bg-surface p-1.5 sm:flex-row">
-            <label htmlFor="repository" className="sr-only">GitHub repository URL</label><input id="repository" name="repository" type="text" readOnly={analysis.status === 'loading'} placeholder="github.com/acme-corp/legacy-payment-monolith" className="w-full flex-1 bg-transparent px-4 py-2 text-sm font-mono text-ink placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent" />
+            <label htmlFor="repository" className="sr-only">GitHub repository URL</label><input ref={repoInputRef} id="repository" name="repository" type="text" readOnly={analysis.status === 'loading'} placeholder="github.com/acme-corp/legacy-payment-monolith" className="w-full flex-1 bg-transparent px-4 py-2 text-sm font-mono text-ink placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent" />
             <button type="submit" disabled={analysis.status === 'loading'} className="w-full shrink-0 rounded-full bg-ink px-6 py-2.5 text-xs font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent disabled:cursor-wait disabled:opacity-80 sm:w-auto">{analysis.status === 'loading' ? 'Dissecting repository...' : 'Audit repository'}</button>
           </form>
+          <div className="mt-3 flex items-center justify-center">
+            <button
+              type="button"
+              onClick={handleOpenGithubPicker}
+              className="inline-flex items-center gap-2 rounded-full border border-hairline bg-surface/80 px-4 py-1.5 font-mono text-xs text-muted hover:border-ink/20 hover:text-ink hover:bg-surface transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent"
+            >
+              <GithubMark size={14} />
+              <span>{installationId ? 'Select from your GitHub repos' : 'Connect GitHub App (Private repos)'}</span>
+              {installationId && <span className="h-1.5 w-1.5 rounded-full bg-emerald" title="GitHub App connected" />}
+            </button>
+          </div>
           {analysis.status === 'loading' && (
             <ol role="status" aria-live="polite" aria-label="Analysis progress" className="mx-auto mt-4 flex max-w-xl flex-wrap justify-center gap-x-5 gap-y-1 font-mono text-[11px]">
               {analysisStages.map((label, index) => {
@@ -186,6 +277,17 @@ export default function Home() {
       <section className="px-6 py-16"><div className="mx-auto max-w-5xl"><h2 className="font-display text-2xl font-bold sm:text-3xl">Load a sample specimen</h2><p className="mt-1 text-sm text-muted">Explore pre-indexed repositories directly in the interactive canvas.</p><div className="mt-8 grid grid-cols-1 gap-5 md:grid-cols-3">{presets.map(([id, meta, name, copy, color]) => <a key={id} href={workspaceTargetHref({ kind: 'preset', id })} className="rounded-2xl border border-hairline bg-surface p-6 text-left hover:bg-hairline/70"><div className={`font-mono text-xs font-semibold ${color}`}>{meta}</div><div className="mt-1.5 font-display font-bold">{name}</div><p className="mt-2 text-xs leading-relaxed text-muted">{copy}</p></a>)}</div></div></section>
 
       <section className="mt-auto px-6 py-14"><div className="mx-auto flex max-w-5xl flex-col items-start justify-between gap-6 rounded-3xl border border-hairline bg-surface p-8 sm:flex-row sm:items-center sm:p-12"><div><h2 className="font-display text-2xl font-bold sm:text-3xl">Ready to inspect your codebase?</h2><p className="mt-1 text-sm text-muted">Open the interactive graph workspace and test live voice interrogation.</p></div><WorkspaceLink className="shrink-0 rounded-full bg-ink px-6 py-3 text-xs font-semibold text-white">Open workspace</WorkspaceLink></div></section>
+
+      <GitHubRepoPickerModal
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+        repositories={githubRepos}
+        loading={loadingRepos}
+        error={reposError}
+        installationId={installationId}
+        onSelectRepo={handleSelectGithubRepo}
+        onRefresh={() => installationId && void fetchGithubRepos(installationId)}
+      />
     </main>
   );
 }

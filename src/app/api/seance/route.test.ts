@@ -28,6 +28,15 @@ describe('POST /api/seance contract', () => {
     expect(payload.data.selectNodeId).toBe('auth');
   });
 
+  it('accepts a graph as large as a full analysis (400 files) and rejects anything larger', async () => {
+    const nodes = Array.from({ length: 400 }, (_, i) => ({ id: `n${i}`, path: `src/n${i}.ts`, rotScore: i % 100 }));
+    const edges = nodes.slice(1).map((node) => ({ source: 'n0', target: node.id }));
+    const ok = await POST(request({ question: 'Which file is riskiest?', selectedNodeId: 'n0', nodes, edges }));
+    expect(ok.status).toBe(200);
+    const tooBig = await POST(request({ question: 'x', nodes: [...nodes, { id: 'extra', path: 'src/extra.ts', rotScore: 1 }], edges }));
+    expect(tooBig.status).toBe(400);
+  });
+
   it('trims and caps questions and never accepts raw source content', async () => {
     const longQuestion = `  ${'x'.repeat(600)}  `;
     const response = await POST(request({
@@ -47,7 +56,7 @@ describe('POST /api/seance contract', () => {
     expect(malformed.status).toBe(400);
     expect((await malformed.json()).error.message).toContain('valid JSON');
 
-    const oversized = await POST(request({ question: 'inspect', nodes: Array.from({ length: 201 }, (_, i) => ({ id: String(i), path: `${i}.ts`, rotScore: 1 })), edges: [] }));
+    const oversized = await POST(request({ question: 'inspect', nodes: Array.from({ length: 401 }, (_, i) => ({ id: String(i), path: `${i}.ts`, rotScore: 1 })), edges: [] }));
     expect(oversized.status).toBe(400);
   });
 });

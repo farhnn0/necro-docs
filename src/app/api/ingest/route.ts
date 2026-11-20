@@ -51,12 +51,25 @@ import { INGEST_CONFIG } from '@/lib/constants';
 import { IngestError, toErrorResponse } from '@/lib/ingest/errors';
 import { analyzeRepository } from '@/lib/repoAnalyzer';
 import type { RepoAnalysis } from '@/lib/repoAnalyzer';
+import { getInstallationToken } from '@/lib/auth/github-app';
 
 export const maxDuration = 60; // seconds; matches INGEST_CONFIG.TIMEOUT_MS
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const startedAt = performance.now();
-  const token = process.env.GITHUB_TOKEN?.trim() || undefined;
+  let token = request.headers.get('x-github-token')?.trim() || process.env.GITHUB_TOKEN?.trim() || undefined;
+  const installationId =
+    request.headers.get('x-github-installation-id')?.trim() ||
+    request.cookies.get('gh_installation_id')?.value;
+
+  if (!token && installationId) {
+    try {
+      const auth = await getInstallationToken(installationId);
+      token = auth.token;
+    } catch {
+      // If installation token creation fails, proceed with default unauthenticated/fallback
+    }
+  }
   try {
     const text = await request.text();
     if (text.length > INGEST_CONFIG.MAX_BODY_CHARS) {

@@ -42,6 +42,21 @@ import type { IngestErrorState, PresetId, Specimen, SpotlightState, WorkspaceNod
 import type { RepoAnalysis } from '@/lib/repoAnalyzer';
 import type { ApiResponse } from '@/lib/types';
 import SeanceConsole from './SeanceConsole';
+import { GraphScopeBar } from './GraphScopeBar';
+import {
+  buildDisplaySpecimen,
+  DEFAULT_SCALE,
+  fitCamera,
+  fitFocusCamera,
+  hiddenFileCount,
+  keyFileIds,
+  MAX_REVEALED,
+  MIN_SCALE,
+  NODE_HEIGHT,
+  NODE_WIDTH,
+  type Camera,
+  type GraphScope,
+} from './graphDisplay';
 import { SurgicalPatch, type CachedPatch } from './SurgicalPatch';
 import { toast } from '@/components/ui/toast';
 
@@ -109,8 +124,12 @@ function PresetChoices({ onChoose }: { onChoose?: (id: PresetId) => void }) {
 
 const GRAPH_WIDTH = 1200;
 const GRAPH_HEIGHT = 1600;
-const NODE_WIDTH = 226;
-const NODE_HEIGHT = 132;
+
+/** Room the floating chrome (header, toolbar, scope bar) takes from the canvas when fitting the graph. */
+function canvasViewport(): { width: number; height: number } {
+  if (typeof window === 'undefined') return { width: 1200, height: 700 };
+  return { width: Math.max(320, window.innerWidth - 64), height: Math.max(240, window.innerHeight - 200) };
+}
 
 /** Shift that moves the nodes' bounding box to the middle of the graph canvas. */
 function centerOffset(nodes: { position: { x: number; y: number } }[]): { x: number; y: number } {
@@ -205,6 +224,7 @@ function GraphViewport({
   specimen,
   selectedNodeId,
   impactOriginId = null,
+  resetKey,
   spotlightNodeIds,
   camera,
   isolateHotspots = false,
@@ -217,6 +237,8 @@ function GraphViewport({
   selectedNodeId: string | null;
   /** File the blast radius was computed from. Outlives the inspector, so closing it keeps the labels stable. */
   impactOriginId?: string | null;
+  /** Changes when the node layout is rebuilt (new specimen or graph scope); clears dragged positions. */
+  resetKey: string;
   spotlightNodeIds: string[];
   camera: { x: number; y: number; scale: number };
   isolateHotspots?: boolean;
@@ -230,10 +252,11 @@ function GraphViewport({
   const [nodePositions, setNodePositions] = useState<Record<string, { x: number; y: number }>>({});
   const [activeDrag, setActiveDrag] = useState<{ id: string; x: number; y: number } | null>(null);
 
+  // Dragged positions survive files being revealed; they reset when the layout itself changes.
   useEffect(() => {
     setNodePositions({});
     setActiveDrag(null);
-  }, [specimen]);
+  }, [resetKey]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -259,7 +282,7 @@ function GraphViewport({
       event.preventDefault();
       if (event.ctrlKey) {
         const factor = Math.exp(-event.deltaY * 0.002);
-        onCameraChange({ ...camera, scale: Math.max(0.35, Math.min(1.8, camera.scale * factor)) });
+        onCameraChange({ ...camera, scale: Math.max(MIN_SCALE, Math.min(1.8, camera.scale * factor)) });
       } else if (event.shiftKey) {
         const horizontalDelta = event.deltaX || event.deltaY;
         onCameraChange({ ...camera, x: camera.x - horizontalDelta, y: camera.y });
@@ -366,7 +389,7 @@ function GraphViewport({
         className="paper-grid relative h-full min-h-0 w-full flex-1 select-none touch-none cursor-grab overflow-hidden active:cursor-grabbing"
       >
         {specimen ? (
-          <div className="absolute left-1/2 top-1/2 h-[1600px] w-[1200px] motion-reduce:transition-none" style={{ willChange: 'transform', transform: `translate(-50%, -50%) translate3d(${camera.x + offset.x}px, ${camera.y + offset.y}px, 0) scale(${camera.scale})` }}>
+          <div className="absolute left-1/2 top-1/2 h-[1600px] w-[1200px] motion-reduce:transition-none" style={{ willChange: 'transform', transform: `translate(-50%, -50%) translate3d(${camera.x}px, ${camera.y}px, 0) scale(${camera.scale}) translate(${offset.x}px, ${offset.y}px)` }}>
             <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible" viewBox={`0 0 ${GRAPH_WIDTH} ${GRAPH_HEIGHT}`} role="img" aria-label="Edges between source files">
               {validEdges.map((edge) => {
                 const source = positions.get(edge.source);
@@ -649,6 +672,12 @@ function DetailPanel({
       </div>
 
       <p className="text-[12px] leading-relaxed text-muted">{node.kind === 'ingested' ? node.summary : 'Preset specimen with curated findings and source context.'}</p>
+      {node.kind === 'ingested' && node.explainedBy === 'static' && (
+        <p className="-mt-1.5 flex items-center gap-1.5 font-mono text-[10px] text-muted">
+          <span className="rounded-md border border-hairline bg-surface px-1.5 py-0.5">Static analysis</span>
+          <span>{node.featured ? 'No AI explanation was available for this file.' : 'AI explanations cover the key files only.'}</span>
+        </p>
+      )}
 
       <section>
         <div className="flex items-center justify-between mb-2">
@@ -716,12 +745,15 @@ function WorkspaceContent() {
   const [spotlightNodeIds, setSpotlightNodeIds] = useState<string[]>([]);
   const [impactOriginId, setImpactOriginId] = useState<string | null>(null);
   const [isolateHotspots, setIsolateHotspots] = useState(false);
+  const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchDebouncing, setIsSearchDebouncing] = useState(false);
   const [minRot, setMinRot] = useState(0);
   const [showComparison, setShowComparison] = useState(false);
   const [previousAudit, setPreviousAudit] = useState<{ files: number; averageRot: number } | null>(null);
   const [briefOpen, setBriefOpen] = useState(false);
-  const [camera, setCamera] = useState({ x: 0, y: 20, scale: 0.92 });
+  const [camera, setCamera] = useState<Camera>({ x: 0, y: 20, scale: DEFAULT_SCALE });
+  const [graphScope, setGraphScope] = useState<GraphScope>('key');
   const [requestState, setRequestState] = useState<
     { status: 'idle' | 'loading' | 'success'; repository?: string; partial?: boolean; showingSample?: boolean; isSlow?: boolean } | IngestErrorState
   >({ status: 'idle' });
@@ -769,7 +801,8 @@ function WorkspaceContent() {
     setSpotlightNodeIds([]);
     setImpactOriginId(null);
     setIsolateHotspots(false);
-    setCamera({ x: 0, y: 20, scale: 0.92 });
+    setGraphScope('key');
+    setCamera({ x: 0, y: 20, scale: DEFAULT_SCALE });
     if (specimenId || !normalizedRepository) {
       setSpecimen(nextSpecimen);
       setRequestState({ status: specimenId ? 'success' : 'idle' });
@@ -779,6 +812,7 @@ function WorkspaceContent() {
     const showAnalysis = (analysis: RepoAnalysis) => {
       const analyzed = convertRepoAnalysis(analysis);
       setSpecimen(analyzed);
+      setCamera(fitCamera(buildDisplaySpecimen(analyzed, 'key', []).nodes, canvasViewport()));
       // Jangan buka Autopsy Report otomatis setelah analyze. Inspector muncul setelah node diklik.
       setSelectedNodeId(null);
       setRequestState({ status: 'success', repository: analysis.title });
@@ -863,6 +897,16 @@ function WorkspaceContent() {
 
   useEffect(() => () => window.speechSynthesis.cancel(), []);
 
+  useEffect(() => {
+    const nextQuery = searchInput.trim();
+    setIsSearchDebouncing(nextQuery !== searchQuery);
+    const timer = window.setTimeout(() => {
+      setSearchQuery(nextQuery);
+      setIsSearchDebouncing(false);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [searchInput, searchQuery]);
+
   const selectNode = (nodeId: string | null) => {
     if (nodeId === null) {
       setSpotlightNodeIds([]);
@@ -883,6 +927,30 @@ function WorkspaceContent() {
       (!query || `${node.name} ${node.path}`.toLowerCase().includes(query)) && node.rotScore >= minRot,
     ).map((node) => node.id));
   }, [specimen, searchQuery, minRot]);
+
+  // Search covers every analyzed file; hits outside the key files are revealed on the canvas.
+  const keyIds = useMemo(() => (specimen ? keyFileIds(specimen) : new Set<string>()), [specimen]);
+  const hiddenMatches = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query || !specimen || graphScope === 'all') return [];
+    return specimen.nodes.filter((node) => !keyIds.has(node.id) && `${node.name} ${node.path}`.toLowerCase().includes(query)).map((node) => node.id);
+  }, [specimen, searchQuery, graphScope, keyIds]);
+  const revealIds = (selected: string | null, origin: string | null, spotlight: readonly string[]) =>
+    [selected, origin, ...spotlight, ...hiddenMatches.slice(0, MAX_REVEALED)].filter((id): id is string => Boolean(id));
+  const revealKey = [...new Set(revealIds(selectedNodeId, impactOriginId, spotlightNodeIds))].sort().join('\n');
+  const displaySpecimen = useMemo(
+    () => (specimen ? buildDisplaySpecimen(specimen, graphScope, revealKey ? revealKey.split('\n') : []) : null),
+    [specimen, graphScope, revealKey],
+  );
+  const hiddenCount = specimen ? hiddenFileCount(specimen) : 0;
+  const revealedCount = displaySpecimen && specimen && graphScope === 'key' ? displaySpecimen.nodes.length - keyIds.size : 0;
+
+  const fitView = () => setCamera(fitCamera(displaySpecimen?.nodes ?? [], canvasViewport()));
+  const switchScope = (next: GraphScope) => {
+    if (!specimen || next === graphScope) return;
+    setGraphScope(next);
+    setCamera(fitCamera(buildDisplaySpecimen(specimen, next, revealIds(selectedNodeId, impactOriginId, spotlightNodeIds)).nodes, canvasViewport()));
+  };
 
   const exportReport = (format: 'json' | 'md') => {
     if (!specimen) return;
@@ -914,6 +982,7 @@ function WorkspaceContent() {
     setImpactOriginId(selectedNodeId);
 
     const downstreamCount = ids.size - 1;
+    const outsideKey = graphScope === 'key' ? [...ids].filter((id) => !keyIds.has(id) && id !== selectedNodeId).length : 0;
     if (downstreamCount === 0) {
       toast.add({
         type: 'info',
@@ -921,10 +990,12 @@ function WorkspaceContent() {
         description: `"${currentNode?.name ?? 'This file'}" has no downstream consumers. Changes here will not cascade to other indexed files.`,
       });
     } else {
+      const view = buildDisplaySpecimen(specimen, graphScope, revealIds(selectedNodeId, selectedNodeId, [...ids]));
+      setCamera(fitFocusCamera(view.nodes, view.nodes.filter((node) => ids.has(node.id)), canvasViewport()));
       toast.add({
         type: 'success',
         title: 'Blast radius mapped',
-        description: `Identified ${downstreamCount} downstream ${downstreamCount === 1 ? 'file' : 'files'} in the dependency blast radius.`,
+        description: `Identified ${downstreamCount} downstream ${downstreamCount === 1 ? 'file' : 'files'} in the dependency blast radius.${outsideKey ? ` ${outsideKey} of them ${outsideKey === 1 ? 'is' : 'are'} outside the key files and ${outsideKey === 1 ? 'was' : 'were'} added to the graph.` : ''}`,
       });
     }
   };
@@ -936,16 +1007,16 @@ function WorkspaceContent() {
   const speakBrief = () => { if ('speechSynthesis' in window) { window.speechSynthesis.cancel(); const utterance = new SpeechSynthesisUtterance(briefText); utterance.rate = 1.02; window.speechSynthesis.speak(utterance); } };
 
   const handleSpotlight = ({ nodeIds, selectedNodeId: responseSelection }: SpotlightState) => {
+    const origin = responseSelection ?? selectedNodeId;
     setSpotlightNodeIds(nodeIds);
-    setImpactOriginId(responseSelection ?? selectedNodeId);
+    setImpactOriginId(origin);
     if (responseSelection) setSelectedNodeId(responseSelection);
-    const selected = (specimen?.nodes ?? []).filter((node) => nodeIds.includes(node.id));
-    if (selected.length === 0) return;
-    const minX = Math.min(...selected.map((node) => node.position.x));
-    const maxX = Math.max(...selected.map((node) => node.position.x + NODE_WIDTH));
-    const minY = Math.min(...selected.map((node) => node.position.y));
-    const maxY = Math.max(...selected.map((node) => node.position.y + NODE_HEIGHT));
-    setCamera({ x: GRAPH_WIDTH / 2 - (minX + maxX) / 2, y: GRAPH_HEIGHT / 2 - (minY + maxY) / 2, scale: selected.length > 2 ? 0.7 : 0.86 });
+    if (!specimen) return;
+    // Spotlit files outside the key view are revealed, so lay out what will be drawn before aiming.
+    const view = buildDisplaySpecimen(specimen, graphScope, revealIds(origin, origin, nodeIds));
+    const focus = view.nodes.filter((node) => nodeIds.includes(node.id));
+    if (focus.length === 0) return;
+    setCamera(fitFocusCamera(view.nodes, focus, canvasViewport()));
   };
 
   const title = specimen?.title ?? source?.repo ?? 'Necro-Docs workspace';
@@ -1045,12 +1116,13 @@ function WorkspaceContent() {
         <div className="relative w-40 sm:w-56">
           <Search size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
           <Input
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
             placeholder="Search files..."
             aria-label="Search files"
-            className="h-8 rounded-xl border-hairline bg-surface/50 pl-8 text-xs placeholder:text-muted/60 focus-visible:ring-1 focus-visible:ring-ink"
+            className="h-8 rounded-xl border-hairline bg-surface/50 pl-8 pr-8 text-xs placeholder:text-muted/60 focus-visible:ring-1 focus-visible:ring-ink"
           />
+          {isSearchDebouncing && <span className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 animate-spin rounded-full border border-hairline border-t-muted" aria-label="Searching" />}
         </div>
         <span aria-hidden="true" className="h-4 w-px bg-hairline" />
         <div className="flex items-center gap-2">
@@ -1089,7 +1161,7 @@ function WorkspaceContent() {
         <div className="flex items-center rounded-xl border border-hairline bg-surface/40 p-0.5">
           <button
             type="button"
-            onClick={() => animateCamera({ ...camera, scale: Math.max(0.35, camera.scale - 0.1) })}
+            onClick={() => animateCamera({ ...camera, scale: Math.max(MIN_SCALE, Math.round((camera.scale - 0.1) * 100) / 100) })}
             className="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition hover:bg-white hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink"
             aria-label="Zoom out"
             title="Zoom out"
@@ -1111,10 +1183,10 @@ function WorkspaceContent() {
           <span aria-hidden="true" className="mx-0.5 h-3.5 w-px bg-hairline" />
           <button
             type="button"
-            onClick={() => animateCamera({ x: 0, y: 20, scale: 0.92 })}
+            onClick={fitView}
             className="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition hover:bg-white hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink"
             aria-label="Fit graph"
-            title="Reset view (Fit to screen)"
+            title="Fit every drawn file on screen"
           >
             <Maximize2 size={13} />
           </button>
@@ -1142,7 +1214,8 @@ function WorkspaceContent() {
         <div className="relative flex min-h-0 flex-1 overflow-hidden">
           <div className="relative flex min-w-0 flex-1 flex-col">
             <GraphViewport
-              specimen={specimen}
+              specimen={displaySpecimen}
+              resetKey={`${specimen?.title ?? ''}:${graphScope}`}
               selectedNodeId={selectedNodeId}
               impactOriginId={impactOriginId}
               spotlightNodeIds={spotlightNodeIds}
@@ -1154,6 +1227,19 @@ function WorkspaceContent() {
               synthesizedPatches={synthesizedPatches}
             />
             {specimen && <SeanceConsole specimen={specimen} selectedNodeId={selectedNodeId} onSpotlight={handleSpotlight} />}
+            {specimen?.kind === 'ingested' && (hiddenCount > 0 || specimen.coverage) && (
+              <GraphScopeBar
+                scope={graphScope}
+                keyCount={keyIds.size}
+                totalCount={specimen.nodes.length}
+                hiddenCount={hiddenCount}
+                revealedCount={revealedCount}
+                searchHits={hiddenMatches.length}
+                coverage={specimen.coverage}
+                onScopeChange={switchScope}
+                onFit={fitView}
+              />
+            )}
           </div>
           {selectedNodeId && (
             <DetailPanel
