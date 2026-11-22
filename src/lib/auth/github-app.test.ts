@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { openInstallations, sealInstallations } from './github-app';
 import { GET as callback } from '@/app/api/auth/github/callback/route';
+import { GET as install } from '@/app/api/auth/github/install/route';
 import { GET as repos } from '@/app/api/auth/github/repos/route';
 import { POST as ingest } from '@/app/api/ingest/route';
 
@@ -67,6 +68,16 @@ describe('GET /api/auth/github/callback', () => {
     const response = await call('code=c&state=s', 's');
     expect(response.headers.get('location')).toMatch(/^https:\/\/github\.com\/apps\/.+\/installations\/new$/);
     expect(response.cookies.get('gh_installations')).toBeUndefined();
+  });
+});
+
+describe('GET /api/auth/github/install', () => {
+  it('signs in with a fresh state, or opens the install page to add an account', async () => {
+    const signIn = await install(new NextRequest('http://localhost/api/auth/github/install'));
+    const state = signIn.cookies.get('gh_oauth_state')?.value;
+    expect(signIn.headers.get('location')).toBe(`https://github.com/login/oauth/authorize?client_id=client-id&state=${state}`);
+    const add = await install(new NextRequest('http://localhost/api/auth/github/install?add=1'));
+    expect(add.headers.get('location')).toMatch(/^https:\/\/github\.com\/apps\/.+\/installations\/new$/);
   });
 });
 

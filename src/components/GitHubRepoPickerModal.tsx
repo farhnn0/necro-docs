@@ -189,7 +189,7 @@ export function GitHubRepoPickerModal({
               </a>
             )}
             <a
-              href="/api/auth/github/install"
+              href="/api/auth/github/install?add=1"
               className="text-skyAccent hover:underline"
             >
               Reinstall / Switch
