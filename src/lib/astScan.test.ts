@@ -149,12 +149,14 @@ describe('4. actionable suggestions', () => {
     const scan = scanAst('types.ts', src(
       'export interface Opts { a?: string; b?: number; if?: boolean; case?: string }',
       'export function run(o: Opts) {',
-      '  const x = o.if && o.case ? 1 : 0;',
+      '  let x = o.if && o.case ? 1 : 0;',
+      '  x ||= 2;',
+      '  x &&= 3;',
       '  if (x) return o.a ?? "ok";',
       '  return "";',
       '}',
     ));
-    // && (1) + ternary (1) + if (1) = 3; optional `?`, `o.if`, `o.case`, and `??` are not branches.
-    expect(scan.branches).toBe(3);
+    // && (1) + ternary (1) + ||= (1) + &&= (1) + if (1) = 5; optional `?`, `o.if`, `o.case`, and `??` are not branches.
+    expect(scan.branches).toBe(5);
   });
 });

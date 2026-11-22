@@ -302,7 +302,9 @@ function isBranchNode(node: ts.Node): boolean {
   ) return true;
   return ts.isBinaryExpression(node) && (
     node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
-    node.operatorToken.kind === ts.SyntaxKind.BarBarToken
+    node.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+    node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandEqualsToken ||
+    node.operatorToken.kind === ts.SyntaxKind.BarBarEqualsToken
   );
 }
 
