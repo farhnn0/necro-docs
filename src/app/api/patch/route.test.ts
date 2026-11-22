@@ -60,6 +60,17 @@ describe('POST /api/patch', () => {
     expect(prompts[0]).toContain('zod');
   });
 
+  it('does not call a finding fixed while one of its occurrences is still there', async () => {
+    const code = ['export function sync() {', '  try { push(); } catch (error) {}', '  return 1;', '}', '', 'export function load() {', '  try { pull(); } catch (error) {}', '  return 2;', '}', ''].join('\n');
+    stubModel({ summary: 'Rethrows the push failure.', edits: [{ old: '  try { push(); } catch (error) {}', new: '  try { push(); } catch (error) { throw error; }' }] });
+    const { data } = await patch({ path: 'src/sync.ts', code });
+
+    expect(data.provider).toBe('ai');
+    expect(data.patchedCode).toContain('catch (error) { throw error; }');
+    expect(data.fixed).toEqual([]);
+    expect(data.remaining).toEqual(['Line 7: Empty catch block swallows exceptions silently.']);
+  });
+
   it('never calls the model for a file whose findings are only structural', async () => {
     const prompts = stubModel({ summary: 'x', edits: [] });
     const code = ['// TODO split this module', 'export const a = 1;', ''].join('\n');

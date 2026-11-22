@@ -256,7 +256,7 @@ export function SurgicalPatch({
               ))}
             </div>
           )}
-          {(state.fixed?.length ?? 0) > 0 && (
+          {(state.fixed?.length ?? 0) + (state.remaining?.length ?? 0) > 0 && (
             <ul className="mt-2 space-y-1 text-[11px] leading-[1.4]" aria-label="Verification result">
               {state.fixed?.map((text) => <li key={text} className="flex gap-1.5 text-emerald"><Check size={12} className="mt-0.5 shrink-0" /><span>Verified fixed: {text}</span></li>)}
               {state.remaining?.map((text) => <li key={text} className="flex gap-1.5 text-amber"><AlertTriangle size={12} className="mt-0.5 shrink-0" /><span>Still open: {text}</span></li>)}

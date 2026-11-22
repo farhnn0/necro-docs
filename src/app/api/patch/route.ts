@@ -117,9 +117,9 @@ function verify(path: string, code: string, patched: string, before: RepoFinding
   const now = countByKind(after);
   const grown = MUST_NOT_GROW.find((kind) => (now.get(kind) ?? 0) > (was.get(kind) ?? 0));
   if (grown) return { reason: `the patch introduces a new "${grown}" finding instead of fixing the problem.` };
-  const fixed = targets.filter((finding) => (now.get(finding.kind) ?? 0) < (was.get(finding.kind) ?? 0));
-  if (fixed.length === 0) return { reason: 'the scanner still reports every listed finding after the patch.' };
-  return { fixed: fixed.map((finding) => finding.text), remaining: after.filter(isPatchable).map((finding) => finding.text) };
+  if (!targets.some((finding) => (now.get(finding.kind) ?? 0) < (was.get(finding.kind) ?? 0))) return { reason: 'the scanner still reports every listed finding after the patch.' };
+  // A kind with several occurrences is fixed only when all are gone; what is left shows up in `remaining` with its new lines.
+  return { fixed: targets.filter((finding) => !now.has(finding.kind)).map((finding) => finding.text), remaining: after.filter(isPatchable).map((finding) => finding.text) };
 }
 
 type Ask = (prompt: string, signal: AbortSignal) => Promise<string | null>;
