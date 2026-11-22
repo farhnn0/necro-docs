@@ -396,8 +396,10 @@ export function scanAst(path: string, content: string): AstScan {
       reportHtml(startLine(sf, node), node.left.name.text, classifyHtml(node.right, sf));
     } else if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
       const method = node.expression.name.text;
-      const arg = method === 'insertAdjacentHTML' ? node.arguments[1] : /^write(?:ln)?$/.test(method) && node.expression.expression.getText(sf) === 'document' ? node.arguments[0] : undefined;
-      if (arg) reportHtml(startLine(sf, node), `${method}()`, classifyHtml(arg, sf));
+      // document.write joins every argument into the HTML; insertAdjacentHTML only parses the second.
+      const args = method === 'insertAdjacentHTML' ? node.arguments.slice(1, 2) : /^write(?:ln)?$/.test(method) && node.expression.expression.getText(sf) === 'document' ? [...node.arguments] : [];
+      const parts = args.map((arg) => classifyHtml(arg, sf));
+      if (parts.length) reportHtml(startLine(sf, node), `${method}()`, parts.find((p) => p.kind === 'unsafe') ?? parts.find((p) => p.kind === 'sanitized') ?? parts[0]);
     }
   });
 

@@ -97,6 +97,7 @@ describe('3. dangerouslySetInnerHTML is judged by what it receives', () => {
     expect(kinds('function a(el: HTMLElement) { el.insertAdjacentHTML("beforeend", DOMPurify.sanitize(x)); }')).toEqual([['html-notice', 1]]);
     expect(kinds('function a(el: HTMLElement) { el.outerHTML = "<hr>"; }')).toEqual([['html-notice', 1]]);
     expect(kinds('function a(el: HTMLElement, html: string) { el.innerHTML = html; document.write(html); }')).toEqual([['unsafe-html', 1], ['unsafe-html', 1]]);
+    expect(kinds('function a(u: string) { document.write("<main>", u, "</main>"); }')).toEqual([['unsafe-html', 1]]);
     expect(kinds('function a(el: HTMLElement, log: { write(s: string): void }) { log.write("x"); if (el.innerHTML === "") return; }')).toEqual([]);
     const raw = scanAst('m.ts', 'function a(el: HTMLElement, html: string) { el.innerHTML = html; }').findings[0];
     expect(raw.text).toContain('innerHTML receives `html`, which does not pass through a recognized sanitizer');
