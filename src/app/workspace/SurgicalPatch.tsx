@@ -15,11 +15,15 @@ import {
 } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { diffHunks, diffLines, unifiedDiff } from '@/lib/diff';
+import { isPatchable, type RepoFinding } from '@/lib/types';
 
 export type CachedPatch = {
   summary: string;
   patchedCode: string;
   provider: 'ai' | 'static-fallback';
+  /** Findings the second scan confirmed as resolved, and fixable findings still present. */
+  fixed?: string[];
+  remaining?: string[];
 };
 
 type PrState =
@@ -48,16 +52,19 @@ type PatchState =
   | { status: 'idle' }
   | { status: 'loading' }
   | { status: 'error'; message: string }
-  | { status: 'ready'; summary: string; patchedCode: string; provider: 'ai' | 'static-fallback' };
+  | ({ status: 'ready' } & CachedPatch);
 
 /**
- * Asks POST /api/patch for a fix of `findings` in `code` and shows a real line diff.
+ * Asks POST /api/patch for a verified fix of the locally fixable findings in `code` and shows a real line diff.
+ * `findings` is only known for analyzed files; without it the server decides whether anything is fixable.
  * Render it with `key={path}` so a patch never carries over to another file.
  */
 export function SurgicalPatch({
   path,
   code,
   findings,
+  importedBy = [],
+  dependencies = [],
   repositoryUrl = null,
   rotScore,
   initialPatch = null,
@@ -65,7 +72,10 @@ export function SurgicalPatch({
 }: {
   path: string;
   code: string;
-  findings: string[];
+  findings?: RepoFinding[];
+  /** Paths of the files that import this one, and the repository's package names: context for the model. */
+  importedBy?: string[];
+  dependencies?: string[];
   repositoryUrl?: string | null;
   rotScore?: number;
   initialPatch?: CachedPatch | null;
@@ -73,12 +83,7 @@ export function SurgicalPatch({
 }) {
   const [state, setState] = useState<PatchState>(() => {
     if (initialPatch) {
-      return {
-        status: 'ready',
-        summary: initialPatch.summary,
-        patchedCode: initialPatch.patchedCode,
-        provider: initialPatch.provider,
-      };
+      return { status: 'ready', ...initialPatch };
     }
     return { status: 'idle' };
   });
@@ -93,9 +98,7 @@ export function SurgicalPatch({
   const hunks = useMemo(() => (patchedCode === null ? [] : diffHunks(diffLines(code, patchedCode))), [code, patchedCode]);
   const added = hunks.reduce((sum, hunk) => sum + hunk.lines.filter((line) => line.kind === 'add').length, 0);
   const removed = hunks.reduce((sum, hunk) => sum + hunk.lines.filter((line) => line.kind === 'del').length, 0);
-  const countLines = (text: string) => text.replace(/\r\n?/g, '\n').replace(/\n$/, '').split('\n').length;
-  // A model that skips code ("// rest unchanged") makes the full-file copy destructive, so flag big shrinkage.
-  const suspiciouslyShort = patchedCode !== null && countLines(patchedCode) < countLines(code) * 0.8;
+  const nothingFixable = findings !== undefined && !findings.some(isPatchable);
 
   const patchFileName = `${cliBranch.replace('necro/', 'necro-')}.patch`;
   // One command set that runs unchanged in Bash, zsh, PowerShell and CMD: no heredoc, no single quotes.
@@ -157,24 +160,21 @@ export function SurgicalPatch({
     setPr({ status: 'idle' });
     setState({ status: 'loading' });
     try {
-      const response = await fetch('/api/patch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, code, findings }) });
-      const data = (await response.json()) as { summary?: string; patchedCode?: string; provider?: string; error?: string };
+      const response = await fetch('/api/patch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, code, importedBy, dependencies }) });
+      const data = (await response.json()) as { summary?: string; patchedCode?: string; provider?: string; fixed?: string[]; remaining?: string[]; error?: string };
       if (!response.ok || typeof data.patchedCode !== 'string') {
         setState({ status: 'error', message: data.error ?? 'The patch could not be generated.' });
         return;
       }
-      const readyState: PatchState = {
-        status: 'ready',
+      const patch: CachedPatch = {
         summary: data.summary ?? '',
         patchedCode: data.patchedCode,
         provider: data.provider === 'ai' ? 'ai' : 'static-fallback',
+        fixed: Array.isArray(data.fixed) ? data.fixed : [],
+        remaining: Array.isArray(data.remaining) ? data.remaining : [],
       };
-      setState(readyState);
-      onSynthesized?.({
-        summary: readyState.summary,
-        patchedCode: readyState.patchedCode,
-        provider: readyState.provider,
-      });
+      setState({ status: 'ready', ...patch });
+      onSynthesized?.(patch);
     } catch {
       setState({ status: 'error', message: 'The server could not be reached.' });
     }
@@ -208,10 +208,12 @@ export function SurgicalPatch({
       <p className="mt-1 text-[11px] leading-normal text-muted">
         {state.status === 'ready'
           ? 'Synthesized AI patch is loaded and ready. Stored in session cache (0 extra tokens).'
-          : 'Synthesizes a targeted AI diff patch to refactor high-rot hotspots.'}
+          : nothingFixable
+            ? 'Nothing here can be fixed by a local edit. Size, nesting, duplication and debt findings need a planned refactor, so no automatic patch is offered.'
+            : 'Fixes the findings a local edit can resolve (swallowed errors, unsafe HTML, eval, type suppressions, hard-coded secrets), then re-scans the result before showing it.'}
       </p>
 
-      {state.status === 'idle' && (
+      {state.status === 'idle' && !nothingFixable && (
         <button type="button" onClick={synthesize} className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-lg bg-ink px-3 py-1.5 text-[11px] font-medium text-white shadow-xs transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">
           <Sparkles size={12} className="text-white/80" />
           <span>Synthesize Surgical Patch</span>
@@ -254,10 +256,11 @@ export function SurgicalPatch({
               ))}
             </div>
           )}
-          {suspiciouslyShort && (
-            <p role="alert" className="mt-2 rounded-md bg-amber/10 px-2 py-1.5 text-[11px] leading-[1.4] text-amber">
-              The patched file is much shorter than the original. The AI may have dropped code, so review the diff before copying the full file.
-            </p>
+          {(state.fixed?.length ?? 0) > 0 && (
+            <ul className="mt-2 space-y-1 text-[11px] leading-[1.4]" aria-label="Verification result">
+              {state.fixed?.map((text) => <li key={text} className="flex gap-1.5 text-emerald"><Check size={12} className="mt-0.5 shrink-0" /><span>Verified fixed: {text}</span></li>)}
+              {state.remaining?.map((text) => <li key={text} className="flex gap-1.5 text-amber"><AlertTriangle size={12} className="mt-0.5 shrink-0" /><span>Still open: {text}</span></li>)}
+            </ul>
           )}
           <div className="mt-2 flex flex-wrap gap-1.5">
             <button type="button" onClick={() => copy('diff')} disabled={hunks.length === 0} className={buttonClass} title="Unified diff of the changed lines, for git apply">

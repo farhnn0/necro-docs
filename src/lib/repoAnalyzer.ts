@@ -11,10 +11,13 @@
  *
  * Server-only: import types from here with `import type` in client code.
  *
- * ponytail: the scanner is regex based, not an AST. Known ceiling: keywords inside string or
- * regex literals can be miscounted, and brace matching ignores regex literals. Upgrade path:
- * parse with the TypeScript compiler API / tree-sitter if precision becomes a requirement.
+ * TypeScript/JavaScript are tokenized by the TypeScript compiler (astScan.ts), so comments, strings,
+ * regex literals and JSX text are exact; the checks then run on those views.
+ * shortcut: Python and Go still use the character scanner (`splitCode`), which can miscount keywords
+ * inside unusual string forms. Upgrade to tree-sitter if those languages need the same precision.
  */
+import { posix } from 'node:path';
+import ts from 'typescript';
 import { INGEST_CONFIG } from '@/lib/constants';
 import type { LanguageFamily } from '@/lib/ingest/analyze';
 import { IngestError } from '@/lib/ingest/errors';
@@ -22,6 +25,7 @@ import { mapGitHubError } from '@/lib/ingest/github';
 import { detectRelations, resolveImport } from '@/lib/ingest/relations';
 import { layoutGraph } from '@/lib/graphLayout';
 import { scanAst, type AstScan } from '@/lib/astScan';
+import type { FindingKind, RepoFinding } from '@/lib/types';
 
 // ============================================================================
 // Public types (the JSON contract returned by POST /api/ingest)
@@ -36,13 +40,16 @@ export interface RepoNode {
   lastCommit: string;
   x: number;
   y: number;
-  findings: string[];
+  /** Scanner findings first (always kept), then observations the AI added about lines it was shown. */
+  findings: RepoFinding[];
+  /** Neutral facts and remarks that are not problems (a healthy file has notes and no findings). */
+  notes: string[];
   summary: string;
   recommendation: string;
   code: string;
   /** One of the key files the workspace shows first (hotspots, hubs, entry points). */
   featured: boolean;
-  /** Who wrote summary/findings/recommendation. Only key files are sent to the AI provider. */
+  /** Who wrote the summary and recommendation. Only key files are sent to the AI provider. */
   explainedBy: 'ai' | 'static';
 }
 
@@ -81,6 +88,8 @@ export interface RepoAnalysis {
   nodes: RepoNode[];
   edges: RepoEdge[];
   coverage: RepoCoverage;
+  /** Package names from the root package.json, so a generated patch knows what it may import. */
+  dependencies: string[];
 }
 
 export interface AnalyzeOptions {
@@ -344,11 +353,7 @@ async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) 
 // 4. Static scanner
 // ============================================================================
 
-type IssueKind =
-  | 'secret' | 'eval' | 'empty-catch' | 'unsafe-html' | 'ts-ignore' | 'deep-nesting' | 'any'
-  | 'long-function' | 'debt' | 'duplicate' | 'default-catch' | 'branching' | 'ignored-catch'
-  // Context-aware kinds from the AST pass (astScan.ts). All rank low: they inform, they do not accuse.
-  | 'monolith' | 'prompt-drift' | 'fallback-chain' | 'html-notice';
+type IssueKind = FindingKind;
 
 /**
  * Default ranking. An empty, undocumented catch stays near the top, but a catch that only returns a
@@ -379,6 +384,8 @@ interface Issue {
   /** Higher sorts first when picking the 2-4 reported findings. */
   severity: number;
   line: number | null;
+  /** Every affected line once repeats are merged. */
+  lines?: number[];
   text: string;
   /** Concrete next step. When this issue ranks first it replaces the generic recommendation. */
   suggestion?: string;
@@ -397,9 +404,9 @@ function mergeByKind(issues: Issue[]): Issue[] {
     const sorted = [...group].sort((a, b) => (a.line ?? 0) - (b.line ?? 0));
     const [first] = sorted;
     if (sorted.length === 1) return first;
-    const lines = sorted.flatMap((item) => (item.line === null ? [] : [item.line]));
+    const lines = sorted.flatMap((item) => item.lines ?? (item.line === null ? [] : [item.line]));
     const shown = lines.slice(0, 5).join(', ') + (lines.length > 5 ? ', …' : '');
-    return { ...first, severity: Math.max(...sorted.map((item) => item.severity)), text: `${first.text.replace(/\.$/, '')} (${sorted.length} places: lines ${shown}).` };
+    return { ...first, lines, severity: Math.max(...sorted.map((item) => item.severity)), text: `${first.text.replace(/\.$/, '')} (${sorted.length} places: lines ${shown}).` };
   });
 }
 
@@ -722,7 +729,13 @@ function longestFunction(
 }
 
 function scanFile(path: string, content: string, lang: Lang): Scanned {
-  const { lines, code, bare, comment } = splitCode(content, lang);
+  // TypeScript/JavaScript get an AST pass: it supplies the line views and the checks that need context.
+  // A parse failure must never fail the analysis, so the character scanner stays as the fallback.
+  let ast: AstScan | null = null;
+  if (lang === 'js') {
+    try { ast = scanAst(path, content); } catch { ast = null; }
+  }
+  const { lines, code, bare, comment } = ast?.views ?? splitCode(content, lang);
   const codeText = code.join('\n');
   const bareText = bare.join('\n');
   const { lineAt, offsets } = lineIndex(bareText);
@@ -732,17 +745,12 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
   const { depth, line: depthLine } = controlDepth(lang, bare, bareText, lineAt);
   const issues: Issue[] = [];
   let silent = 0;
-  // TypeScript/JavaScript get an AST pass for the checks that need context. A parse failure must never fail the analysis.
-  let ast: AstScan | null = null;
-  if (lang === 'js') {
-    try { ast = scanAst(path, content); } catch { ast = null; }
-  }
 
   // Hard-coded credentials (+20 once). The value itself is never echoed into the finding.
-  const secretLine = lines.findIndex((l) => SECRET_RE.test(l));
-  if (secretLine >= 0) {
+  const secretLines = lines.flatMap((l, i) => (SECRET_RE.test(l) ? [i + 1] : []));
+  if (secretLines.length > 0) {
     silent += ROT.SECRET;
-    issues.push(issue('secret', secretLine + 1, `Line ${secretLine + 1}: Hard-coded credential (API key or private key format) is committed to the repository.`));
+    issues.push({ ...issue('secret', secretLines[0], `Line ${secretLines[0]}: Hard-coded credential (API key or private key format) is committed to the repository.`), lines: secretLines });
   }
 
   // Catch blocks: empty (+18 once) or returning a placeholder (+6 once). Documented ignores add nothing.
@@ -760,20 +768,20 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
   let weak = false;
   const firstLine = (re: RegExp, source: string[]) => {
     const hits = source.flatMap((l, i) => (re.test(l) ? [i + 1] : []));
-    return { count: hits.length, line: hits[0] ?? 0 };
+    return { count: hits.length, line: hits[0] ?? 0, lines: hits };
   };
   if (lang === 'js') {
     const ignores = firstLine(/@ts-(?:ignore|nocheck)\b/, comment);
     if (ignores.count > 0) {
       weak = true;
-      issues.push(issue('ts-ignore', ignores.line, `Line ${ignores.line}: @ts-ignore suppresses type checking${ignores.count > 1 ? ` (${ignores.count} places)` : ''}.`));
+      issues.push({ ...issue('ts-ignore', ignores.line, `Line ${ignores.line}: @ts-ignore suppresses type checking${ignores.count > 1 ? ` (${ignores.count} places)` : ''}.`), lines: ignores.lines });
     }
     if (/\.tsx?$/i.test(path)) {
       const anyRe = /(?::\s*any\b|\bas\s+any\b|<any>|\bany\[\])/g;
-      const hits = bare.flatMap((l, i) => (l.match(anyRe) ?? []).map(() => i + 1));
+      const hits = ast?.anyLines ?? bare.flatMap((l, i) => (l.match(anyRe) ?? []).map(() => i + 1));
       if (hits.length >= 3) {
         weak = true;
-        issues.push(issue('any', hits[0], `Line ${hits[0]}: \`any\` is used ${hits.length} times, which disables type checking.`));
+        issues.push({ ...issue('any', hits[0], `Line ${hits[0]}: \`any\` is used ${hits.length} times, which disables type checking.`), lines: hits });
       }
     }
     // Raw HTML injection is an XSS risk unless the value is sanitized first. React's dangerouslySetInnerHTML is
@@ -783,7 +791,7 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
       : /\bdangerouslySetInnerHTML\b|\.(?:inner|outer)HTML\s*=(?!=)|\bdocument\.write\s*\(|\.insertAdjacentHTML\s*\(/;
     const html = firstLine(sinks, bare);
     if (html.count > 0) {
-      issues.push(issue('unsafe-html', html.line, `Line ${html.line}: Raw HTML is injected into the page${html.count > 1 ? ` (${html.count} places)` : ''}; unsanitized input here is an XSS risk.`));
+      issues.push({ ...issue('unsafe-html', html.line, `Line ${html.line}: Raw HTML is injected into the page${html.count > 1 ? ` (${html.count} places)` : ''}; unsanitized input here is an XSS risk.`), lines: html.lines });
     }
     for (const finding of ast?.findings ?? []) {
       issues.push({ ...issue(finding.kind, finding.line, finding.text), ...(finding.suggestion ? { suggestion: finding.suggestion } : {}) });
@@ -794,7 +802,7 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
     if (evals.count > 0) {
       weak = true;
       const call = /\bnew\s+Function\b/.test(bare[evals.line - 1]) ? 'new Function()' : lang === 'py' && /\bexec\s*\(/.test(bare[evals.line - 1]) ? 'exec()' : 'eval()';
-      issues.push(issue('eval', evals.line, `Line ${evals.line}: ${call} runs dynamic code and is unsafe.`));
+      issues.push({ ...issue('eval', evals.line, `Line ${evals.line}: ${call} runs dynamic code and is unsafe.`), lines: evals.lines });
     }
   }
   if (weak) silent += ROT.WEAK_TYPING;
@@ -808,7 +816,8 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
     issues.push(issue('debt', i + 1, `Line ${i + 1}: ${m[0].toUpperCase()} comment marks unresolved technical debt: "${note}".`));
   });
 
-  const long = longestFunction(lang, bare, bareText, offsets, lineAt);
+  const longest = ast ? ast.longestFunction : longestFunction(lang, bare, bareText, offsets, lineAt);
+  const long = longest && longest.length >= LONG_FUNCTION_LINES ? longest : null;
   if (long) {
     issues.push(issue('long-function', long.line, `Line ${long.line}: ${long.name}() spans ${long.length} lines; split it into smaller functions.`));
   }
@@ -852,22 +861,50 @@ function markPromptDrift(files: Scanned[]): void {
 // Edges, score, layout
 // ============================================================================
 
-function resolveEdges(files: Scanned[]): RepoEdge[] {
+/** Import aliases of the root tsconfig.json / jsconfig.json, as [pattern, targets relative to the repository root]. */
+type Aliases = { baseUrl: string | null; paths: Array<[string, string[]]> };
+
+// shortcut: root config only and `extends` is not followed, so monorepo packages and package.json "imports"
+// (#lib/x) stay unresolved. Upgrade to ts.parseJsonConfigFileContent with a virtual host when users hit that.
+function readAliases(configText: string): Aliases {
+  const options = (ts.parseConfigFileTextToJson('tsconfig.json', configText).config as { compilerOptions?: { baseUrl?: unknown; paths?: unknown } } | undefined)?.compilerOptions;
+  const baseUrl = typeof options?.baseUrl === 'string' ? options.baseUrl : null;
+  const paths = options?.paths !== null && typeof options?.paths === 'object' ? Object.entries(options.paths as Record<string, unknown>) : [];
+  return {
+    baseUrl,
+    paths: paths.flatMap(([pattern, targets]): Array<[string, string[]]> =>
+      Array.isArray(targets) ? [[pattern, targets.filter((t): t is string => typeof t === 'string').map((t) => posix.join(baseUrl ?? '.', t))]] : []),
+  };
+}
+
+/** Root-relative candidates for a non-relative specifier: tsconfig `paths` first, then `baseUrl`, then the `@/` convention. */
+function aliasCandidates(specifier: string, aliases: Aliases): string[] {
+  const out: string[] = [];
+  for (const [pattern, targets] of aliases.paths) {
+    const star = pattern.indexOf('*');
+    const [head, tail] = star === -1 ? [pattern, ''] : [pattern.slice(0, star), pattern.slice(star + 1)];
+    const matches = star === -1 ? specifier === pattern : specifier.length >= head.length + tail.length && specifier.startsWith(head) && specifier.endsWith(tail);
+    if (matches) out.push(...targets.map((target) => target.replace('*', specifier.slice(head.length, specifier.length - tail.length))));
+  }
+  if (aliases.baseUrl !== null) out.push(posix.join(aliases.baseUrl, specifier));
+  // `@/x` conventionally maps to `src/x`, otherwise to the repository root.
+  if (/^[@~]\//.test(specifier)) out.push(`src/${specifier.slice(2)}`, specifier.slice(2));
+  return out;
+}
+
+function resolveEdges(files: Scanned[], aliases: Aliases): RepoEdge[] {
   const selected = new Set(files.map((f) => f.path));
   const edges = new Map<string, RepoEdge>();
   for (const file of files) {
     if (file.lang === 'go') continue;
     const family: LanguageFamily = file.lang === 'py' ? 'py' : 'js';
     for (const imp of detectRelations(file.codeText, family).imports) {
-      let target: string | null;
-      if (family === 'js' && /^[@~]\//.test(imp.specifier)) {
-        // `@/x` conventionally maps to `src/x`, otherwise to the repository root.
-        const rest = imp.specifier.slice(2);
-        target =
-          resolveImport({ ...imp, specifier: `./src/${rest}` }, '_.ts', 'js', selected) ??
-          resolveImport({ ...imp, specifier: `./${rest}` }, '_.ts', 'js', selected);
-      } else {
-        target = resolveImport(imp, file.path, family, selected);
+      let target = resolveImport(imp, file.path, family, selected);
+      if (!target && family === 'js' && !imp.specifier.startsWith('.')) {
+        for (const candidate of aliasCandidates(imp.specifier, aliases)) {
+          target = resolveImport({ ...imp, specifier: `./${candidate}` }, '_.ts', 'js', selected);
+          if (target) break;
+        }
       }
       if (target && target !== file.path) edges.set(`${file.path}\u0000${target}`, { from: file.path, to: target });
     }
@@ -983,6 +1020,40 @@ interface Explanation {
   recommendation: string;
 }
 
+/** Every scanner issue of a file as a structured finding, most severe first. */
+function toFindings(f: Scanned): RepoFinding[] {
+  return [...f.issues]
+    .sort((a, b) => b.severity - a.severity || (a.line ?? 0) - (b.line ?? 0))
+    .map((item) => ({
+      kind: item.kind,
+      line: item.line,
+      lines: item.lines ?? (item.line === null ? [] : [item.line]),
+      text: item.text,
+      suggestion: item.suggestion ?? RECOMMENDATIONS[item.kind](item.line),
+      source: 'static',
+    }));
+}
+
+/**
+ * Scanner findings always stay. The model may add an observation only about a line it was shown and that
+ * the scanner has not already reported; remarks without a line become notes, anything else is dropped.
+ */
+function mergeAiFindings(node: { findings: RepoFinding[]; notes: string[] }, ai: Partial<Explanation>, shown: ReadonlySet<number>, suggestion: string): { findings: RepoFinding[]; notes: string[] } {
+  const findings = [...node.findings];
+  const remarks: string[] = [];
+  for (const text of ai.findings ?? []) {
+    const cited = /^Lines?\s+(\d+)/i.exec(text);
+    if (!cited) remarks.push(text);
+    else {
+      const line = Number(cited[1]);
+      if (shown.has(line) && !findings.some((finding) => finding.lines.includes(line))) {
+        findings.push({ kind: 'ai', line, lines: [line], text, suggestion, source: 'ai' });
+      }
+    }
+  }
+  return { findings, notes: [...remarks, ...node.notes].slice(0, 3) };
+}
+
 /** Path-based role hints. First match wins, so specific folders come before generic ones. */
 const ROLE_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/(?:^|\/)controllers?\/|\.controller\.[^/]+$/i, 'HTTP controller'],
@@ -1053,7 +1124,7 @@ const RECOMMENDATIONS: Record<IssueKind, (line: number | null) => string> = {
 };
 
 /** Deterministic explanation used when no AI provider is configured, or when it fails. */
-function fallbackExplanation(f: Scanned, degree: { in: number; out: number }, score: number): Explanation {
+function fallbackExplanation(f: Scanned, degree: { in: number; out: number }, score: number): { summary: string; findings: RepoFinding[]; notes: string[]; recommendation: string } {
   const role = roleOf(f.path);
   const dir = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : 'the repository root';
   const names = exportedNames(f);
@@ -1070,21 +1141,19 @@ function fallbackExplanation(f: Scanned, degree: { in: number; out: number }, sc
   const density = f.codeLoc ? f.branches / f.codeLoc : 0;
   const level = density < 0.08 ? 'low' : density < 0.18 ? 'moderate' : 'high';
   const complexity = `Branching complexity is ${level}: ${f.branches} decision point${f.branches === 1 ? '' : 's'} across ${f.codeLoc} code lines in a ${f.loc}-line file, with control flow nested up to ${f.depth} level${f.depth === 1 ? '' : 's'}.`;
-  const ranked = [...f.issues].sort((a, b) => b.severity - a.severity || (a.line ?? 0) - (b.line ?? 0));
-  const findings = ranked.slice(0, 3).map((item) => item.text);
-  if (findings.length === 0) findings.push('No swallowed errors, hard-coded secrets, eval() calls, type suppressions, or debt comments were detected.');
+  const findings = toFindings(f);
   // Never restate branching when a branching finding is already shown; use the dependency fact instead.
-  if (findings.length < 2) findings.push(ranked.some((item) => item.kind === 'branching') ? reach : complexity);
+  const notes = [findings.some((item) => item.kind === 'branching') ? reach : complexity];
+  if (findings.length === 0) notes.unshift('No swallowed errors, hard-coded secrets, eval() calls, type suppressions, or debt comments were detected.');
 
-  const top = ranked[0];
-  const recommendation = top
-    ? top.suggestion ?? RECOMMENDATIONS[top.kind](top.line)
+  const recommendation = findings[0]
+    ? findings[0].suggestion
     : degree.in > 3
       ? `Keep the exported contract of ${f.name} stable and add contract tests before changing it, because ${degree.in} files depend on it.`
       : score < 30
         ? `No change is needed now; cover ${names.length ? listNames(names, 2) : `${f.name}'s main behavior`} with tests before refactoring.`
         : `Add focused tests around ${f.name} before refactoring its branching logic.`;
-  return { summary, findings, recommendation };
+  return { summary, findings, notes, recommendation };
 }
 
 const EVIDENCE_MAX_LINES = 75;
@@ -1423,7 +1492,25 @@ export async function analyzeRepository(repoUrl: string, options: AnalyzeOptions
     });
   }
 
-  const fetched = await mapLimit(selected, FETCH_CONCURRENCY, (entry) => fetchRaw(owner, repo, defaultBranch, entry.path, ctx));
+  // Root project files: import aliases for the dependency graph, package names for patch context. Both are optional.
+  const rootText = async (...names: string[]): Promise<string | null> => {
+    const name = names.find((candidate) => tree.tree!.some((entry) => entry.type === 'blob' && entry.path === candidate));
+    const result = name ? await fetchRaw(owner, repo, defaultBranch, name, ctx) : null;
+    return result?.ok ? result.text : null;
+  };
+  const [fetched, configText, packageText] = await Promise.all([
+    mapLimit(selected, FETCH_CONCURRENCY, (entry) => fetchRaw(owner, repo, defaultBranch, entry.path, ctx)),
+    rootText('tsconfig.json', 'jsconfig.json'),
+    rootText('package.json'),
+  ]);
+  const aliases = configText ? readAliases(configText) : { baseUrl: null, paths: [] };
+  let dependencies: string[] = [];
+  try {
+    const pkg = JSON.parse(packageText ?? '{}') as { dependencies?: Record<string, unknown>; devDependencies?: Record<string, unknown> };
+    dependencies = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }).slice(0, 200);
+  } catch {
+    // A malformed package.json only costs the patch prompt its dependency list.
+  }
   const files: Scanned[] = [];
   let rateLimited = false;
   selected.forEach((entry, i) => {
@@ -1443,7 +1530,7 @@ export async function analyzeRepository(repoUrl: string, options: AnalyzeOptions
 
   markDuplicates(files);
   markPromptDrift(files);
-  const edges = resolveEdges(files);
+  const edges = resolveEdges(files, aliases);
   const degree = new Map<string, { in: number; out: number }>(files.map((f) => [f.path, { in: 0, out: 0 }]));
   for (const e of edges) {
     degree.get(e.from)!.out++;
@@ -1468,7 +1555,7 @@ export async function analyzeRepository(repoUrl: string, options: AnalyzeOptions
       const fallback = fallbackExplanation(f, d, score);
       return {
         id: f.path, name: f.name, path: f.path, loc: f.loc, rot: score,
-        lastCommit: 'Active branch', x, y, findings: fallback.findings,
+        lastCommit: 'Active branch', x, y, findings: fallback.findings, notes: fallback.notes,
         summary: fallback.summary, recommendation: fallback.recommendation,
         code: f.lines.join('\n'), staticFindings,
       };
@@ -1476,9 +1563,13 @@ export async function analyzeRepository(repoUrl: string, options: AnalyzeOptions
 
   const byPath = new Map(files.map((f) => [f.path, f]));
   const featured = pickFeatured(staticNodes, degree);
+  /** Source lines each file's evidence showed the model; an AI finding about any other line is a guess. */
+  const shownLines = new Map<string, Set<number>>();
   const explanations = await requestBatchExplanation(
     staticNodes.filter((node) => featured.has(node.path)).map((node): ExplanationInput => {
       const f = byPath.get(node.path)!;
+      const code = numberedEvidence(f);
+      shownLines.set(node.path, new Set([...code.matchAll(/^(\d+)\| /gm)].map((m) => Number(m[1]))));
       return {
         path: node.path,
         role: roleOf(node.path),
@@ -1490,22 +1581,28 @@ export async function analyzeRepository(repoUrl: string, options: AnalyzeOptions
         nestingDepth: f.depth,
         rot: node.rot,
         staticFindings: node.staticFindings,
-        code: numberedEvidence(f),
+        code,
       };
     }),
     ctx.signal,
   );
-  // Per field: whatever the model returned wins, the static explanation fills any gap.
+  // Summary and recommendation: whatever the model returned wins, the static text fills any gap.
   const nodes: RepoNode[] = staticNodes.map(({ staticFindings: _staticFindings, ...node }): RepoNode => {
     const ai = explanations?.get(node.path);
     const base = { ...node, featured: featured.has(node.path) };
-    return ai
-      ? { ...base, explainedBy: 'ai', summary: ai.summary ?? node.summary, findings: ai.findings ?? node.findings, recommendation: ai.recommendation ?? node.recommendation }
-      : { ...base, explainedBy: 'static' };
+    if (!ai) return { ...base, explainedBy: 'static' };
+    const recommendation = ai.recommendation ?? node.recommendation;
+    return { ...base, explainedBy: 'ai', summary: ai.summary ?? node.summary, recommendation, ...mergeAiFindings(node, ai, shownLines.get(node.path) ?? new Set(), recommendation) };
   }).sort((a, b) => (a.path < b.path ? -1 : 1));
 
   const weight = nodes.reduce((sum, n) => sum + Math.max(n.loc, 1), 0);
   const overallRot = Math.round(nodes.reduce((sum, n) => sum + n.rot * Math.max(n.loc, 1), 0) / weight);
   const coverage: RepoCoverage = { ...selection, analyzed: nodes.length, featured: featured.size, treeTruncated: tree.truncated === true };
-  return { title, defaultBranch, rotSummary: `${overallRot}% infected`, overallRot, nodes, edges, coverage };
+  return { title, defaultBranch, rotSummary: `${overallRot}% infected`, overallRot, nodes, edges, coverage, dependencies };
+}
+
+/** Single-file scan with the same rules as the repository analysis; cross-file checks (duplicates, prompt drift) need the whole repository. */
+export function scanSource(path: string, content: string): RepoFinding[] {
+  const lang = langOf(path);
+  return lang ? toFindings(scanFile(path, content, lang)) : [];
 }

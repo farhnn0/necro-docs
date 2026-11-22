@@ -40,7 +40,7 @@ import {
 } from '@/lib/conversion/specimens';
 import type { IngestErrorState, PresetId, Specimen, SpotlightState, WorkspaceNode } from '@/lib/conversion/types';
 import type { RepoAnalysis } from '@/lib/repoAnalyzer';
-import type { ApiResponse } from '@/lib/types';
+import type { ApiResponse, RepoFinding } from '@/lib/types';
 import SeanceConsole from './SeanceConsole';
 import { GraphScopeBar } from './GraphScopeBar';
 import {
@@ -562,7 +562,13 @@ function DetailPanel({
   const [highlightRange, setHighlightRange] = useState<{ start: number; end: number } | null>(null);
   const codeRef = useRef<HTMLDivElement>(null);
   const node = specimen?.nodes.find((candidate) => candidate.id === selectedNodeId) ?? null;
-  const findings = node?.findings ?? [];
+  // Preset specimens carry curated sentences; only analyzed files have scanner-confirmed, structured findings.
+  const findings: RepoFinding[] = !node ? [] : node.kind === 'ingested' ? node.findings
+    : node.findings.map((text) => {
+      const line = Number(/^Lines?\s+(\d+)/i.exec(text)?.[1]) || null;
+      return { kind: 'ai', line, lines: line === null ? [] : [line], text, suggestion: '', source: 'ai' };
+    });
+  const notes = node?.kind === 'ingested' ? node.notes : [];
   const code = node?.codeExcerpt ?? '';
   const imports = node ? specimen?.edges.filter((edge) => edge.source === node.id) ?? [] : [];
   const importedBy = node ? specimen?.edges.filter((edge) => edge.target === node.id) ?? [] : [];
@@ -580,10 +586,8 @@ function DetailPanel({
     return () => window.clearTimeout(timer);
   }, [tab, highlightRange]);
 
-  const jumpToFinding = (finding: string) => {
-    const match = /Lines?\s+(\d+)(?:\s*(?:[-–]|to)\s*(\d+))?/i.exec(finding);
-    if (match) setHighlightRange({ start: Number(match[1]), end: Number(match[2] ?? match[1]) });
-    else setHighlightRange(null);
+  const jumpToFinding = (finding: RepoFinding) => {
+    setHighlightRange(finding.line === null ? null : { start: finding.line, end: finding.line });
     setTab('source');
   };
 
@@ -689,19 +693,21 @@ function DetailPanel({
           <span className="font-mono text-[10px] text-muted">Click line to jump</span>
         </div>
         <ol className="space-y-2">{findings.map((finding) => {
-          const match = /^(?:Lines?\s+(\d+(?:\s*(?:[-–]|to)\s*\d+)?))(?::\s*|\s*-\s*|\s+)(.*)$/i.exec(finding);
-          const lineLabel = match ? `L${match[1]}` : null;
-          const message = match ? match[2] : finding;
-          const isCritical = /empty catch|high cyclomatic|eval|unsafe|vulnerability/i.test(finding);
-          return <li key={finding}><button type="button" onClick={() => jumpToFinding(finding)} className="group flex w-full items-start gap-2.5 rounded-xl border border-hairline bg-surface/30 p-2.5 text-left transition-all hover:border-muted/30 hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">{lineLabel ? <span className="shrink-0 rounded-md border border-hairline bg-white px-1.5 py-0.5 font-mono text-[10px] font-semibold text-ink shadow-2xs group-hover:border-ink/30">{lineLabel}</span> : <span className={`shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-semibold ${isCritical ? 'bg-crimson/10 text-crimson' : 'bg-surface text-muted'}`}>#</span>}<span className="text-[12px] leading-relaxed text-ink group-hover:text-black">{message}</span></button></li>;
+          const lineLabel = finding.line === null ? null : `L${finding.line}`;
+          const message = finding.text.replace(/^Lines?\s+\d+(?:\s*(?:[-–]|to)\s*\d+)?(?::\s*|\s*-\s*|\s+)/i, '');
+          const isCritical = finding.kind === 'secret' || finding.kind === 'eval' || finding.kind === 'empty-catch' || finding.kind === 'unsafe-html' || /empty catch|high cyclomatic|eval|unsafe|vulnerability/i.test(finding.text);
+          return <li key={finding.text}><button type="button" onClick={() => jumpToFinding(finding)} className="group flex w-full items-start gap-2.5 rounded-xl border border-hairline bg-surface/30 p-2.5 text-left transition-all hover:border-muted/30 hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">{lineLabel ? <span className="shrink-0 rounded-md border border-hairline bg-white px-1.5 py-0.5 font-mono text-[10px] font-semibold text-ink shadow-2xs group-hover:border-ink/30">{lineLabel}</span> : <span className={`shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-semibold ${isCritical ? 'bg-crimson/10 text-crimson' : 'bg-surface text-muted'}`}>#</span>}<span className="text-[12px] leading-relaxed text-ink group-hover:text-black">{message}</span></button></li>;
         })}</ol>
+        {notes.length > 0 && <ul className="mt-2 space-y-1">{notes.map((note) => <li key={note} className="text-[11px] leading-relaxed text-muted">{note}</li>)}</ul>}
       </section>
 
       <SurgicalPatch
         key={node.path}
         path={node.path}
         code={code}
-        findings={findings}
+        findings={node.kind === 'ingested' ? node.findings : undefined}
+        importedBy={importedBy.flatMap((edge) => specimen?.nodes.find((candidate) => candidate.id === edge.source)?.path ?? [])}
+        dependencies={specimen?.kind === 'ingested' ? specimen.dependencies : []}
         repositoryUrl={specimen?.kind === 'ingested' ? specimen.repositoryUrl : null}
         rotScore={node.rotScore}
         initialPatch={synthesizedPatches[node.path] ?? null}

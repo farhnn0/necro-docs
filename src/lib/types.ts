@@ -308,3 +308,32 @@ export interface IngestResult {
   edges: IngestEdge[];
   metadata: IngestMetadata;
 }
+
+// ============================================================================
+// Repository analysis findings (POST /api/ingest -> workspace -> POST /api/patch)
+// ============================================================================
+
+export type FindingKind =
+  | 'secret' | 'eval' | 'empty-catch' | 'unsafe-html' | 'ts-ignore' | 'deep-nesting' | 'any'
+  | 'long-function' | 'debt' | 'duplicate' | 'default-catch' | 'branching' | 'ignored-catch'
+  // Context-aware kinds from the AST pass (astScan.ts). All rank low: they inform, they do not accuse.
+  | 'monolith' | 'prompt-drift' | 'fallback-chain' | 'html-notice';
+
+export interface RepoFinding {
+  /** 'ai' marks an observation the model added; the scanner did not confirm it. */
+  kind: FindingKind | 'ai';
+  /** First affected line (1-based), or null for whole-file findings. */
+  line: number | null;
+  /** Every affected line when the same problem repeats. */
+  lines: number[];
+  text: string;
+  /** Concrete next step for this finding. */
+  suggestion: string;
+  source: 'static' | 'ai';
+}
+
+/** Findings a local edit can resolve. Everything else is structural and needs a refactor, not a patch. */
+export const PATCHABLE_KINDS: readonly FindingKind[] = ['secret', 'eval', 'empty-catch', 'default-catch', 'unsafe-html', 'ts-ignore', 'any'];
+
+export const isPatchable = (finding: RepoFinding): boolean =>
+  finding.source === 'static' && finding.line !== null && (PATCHABLE_KINDS as readonly string[]).includes(finding.kind);
