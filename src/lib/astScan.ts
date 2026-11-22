@@ -173,6 +173,7 @@ function controlDepth(node: ts.Node, current = 0): number {
 }
 
 function functionName(fn: ts.FunctionLikeDeclaration, sf: ts.SourceFile): string {
+  if (ts.isConstructorDeclaration(fn)) return 'constructor';
   if (fn.name) return fn.name.getText(sf);
   const parent = fn.parent;
   if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) return parent.name.text;
@@ -302,7 +303,7 @@ export function scanAst(path: string, content: string): AstScan {
       literal(node, node.text);
     } else if (node.kind === ts.SyntaxKind.AnyKeyword) {
       out.anyLines.push(startLine(sf, node));
-    } else if (isFunctionLike(node) && node.body && ts.isBlock(node.body)) {
+    } else if ((isFunctionLike(node) || ts.isConstructorDeclaration(node) || ts.isAccessor(node)) && node.body && ts.isBlock(node.body)) {
       const line = startLine(sf, node);
       const length = sf.getLineAndCharacterOfPosition(node.end).line + 1 - line + 1;
       if (!out.longestFunction || length > out.longestFunction.length) {

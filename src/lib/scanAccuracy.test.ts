@@ -52,6 +52,12 @@ const SAMPLES: Array<{ name: string; path: string; code: string; expected: Array
     expected: [['long-function', 1]],
   },
   {
+    name: 'a long constructor counts as a long function',
+    path: 'src/store.ts',
+    code: src('export class Store {', '  constructor() {', ...big(70), '  }', '}'),
+    expected: [['long-function', 2]],
+  },
+  {
     name: 'eval and @ts-ignore are reported at their own lines',
     path: 'src/dyn.ts',
     code: src('export function calc(input: string) {', '  // @ts-ignore', '  return eval(input);', '}'),
