@@ -164,3 +164,75 @@ export function getGitHubAppInstallUrl(): string {
   const slug = rawSlug.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
   return `https://github.com/apps/${slug}/installations/new`;
 }
+
+/** Installations the signed-in user can access, as GitHub listed them at sign-in. */
+export interface VerifiedInstallation {
+  id: number;
+  account: string;
+}
+
+export const INSTALLATIONS_COOKIE = 'gh_installations';
+export const OAUTH_STATE_COOKIE = 'gh_oauth_state';
+/** Matches the lifetime of a GitHub App user access token. */
+export const SESSION_TTL_SECONDS = 8 * 60 * 60;
+
+function requiredEnv(name: 'GITHUB_APP_CLIENT_ID' | 'GITHUB_APP_CLIENT_SECRET'): string {
+  const value = process.env[name]?.trim();
+  if (!value) throw new Error(`${name} is not configured`);
+  return value;
+}
+
+const mac = (body: string) => crypto.createHmac('sha256', requiredEnv('GITHUB_APP_CLIENT_SECRET')).update(body).digest('base64url');
+
+/** Signs the verified installations so the browser can hold them without being able to change them. */
+export function sealInstallations(installations: VerifiedInstallation[], now = Date.now()): string {
+  const body = Buffer.from(JSON.stringify({ installations, exp: now + SESSION_TTL_SECONDS * 1000 })).toString('base64url');
+  return `${body}.${mac(body)}`;
+}
+
+/** The installations in a cookie made by `sealInstallations`; empty when it is missing, altered or expired. */
+export function openInstallations(cookie: string | undefined, now = Date.now()): VerifiedInstallation[] {
+  const [body, signature] = cookie?.split('.') ?? [];
+  if (!body || !signature) return [];
+  try {
+    const expected = Buffer.from(mac(body));
+    const given = Buffer.from(signature);
+    if (expected.length !== given.length || !crypto.timingSafeEqual(expected, given)) return [];
+    const data = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as { installations?: VerifiedInstallation[]; exp?: number };
+    return typeof data.exp === 'number' && data.exp > now && Array.isArray(data.installations) ? data.installations : [];
+  } catch {
+    return [];
+  }
+}
+
+/** GitHub's sign-in page for this App; GitHub sends the user back to the App's callback URL with `code` and `state`. */
+export function getOAuthAuthorizeUrl(state: string): string {
+  const params = new URLSearchParams({ client_id: requiredEnv('GITHUB_APP_CLIENT_ID'), state });
+  return `https://github.com/login/oauth/authorize?${params}`;
+}
+
+/**
+ * Exchanges a sign-in code for a user token and returns the installations of this App that the user can access.
+ * The user token is not kept.
+ */
+export async function getUserInstallations(code: string): Promise<VerifiedInstallation[]> {
+  const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'User-Agent': 'NecroDocs-Scanner' },
+    body: JSON.stringify({ client_id: requiredEnv('GITHUB_APP_CLIENT_ID'), client_secret: requiredEnv('GITHUB_APP_CLIENT_SECRET'), code }),
+    cache: 'no-store',
+  });
+  const tokenData = (await tokenResponse.json().catch(() => null)) as { access_token?: string; error?: string } | null;
+  if (!tokenResponse.ok || !tokenData?.access_token) {
+    throw new Error(`GitHub rejected the sign-in code (${tokenData?.error ?? tokenResponse.status})`);
+  }
+
+  // shortcut: first 100 installations only, page through `Link` if a user ever has more.
+  const response = await fetch('https://api.github.com/user/installations?per_page=100', {
+    headers: { Authorization: `Bearer ${tokenData.access_token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'NecroDocs-Scanner' },
+    cache: 'no-store',
+  });
+  if (!response.ok) throw new Error(`Failed to list the user's installations (${response.status})`);
+  const data = (await response.json()) as { installations?: Array<{ id: number; account?: { login?: string } | null }> };
+  return (data.installations ?? []).map((installation) => ({ id: installation.id, account: installation.account?.login ?? '' }));
+}
