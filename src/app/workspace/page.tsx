@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { CodeBlock } from '@/components/ui/code-block';
 import { Input } from '@/components/ui/input';
@@ -144,23 +144,23 @@ function centerOffset(nodes: { position: { x: number; y: number } }[]): { x: num
   return { x: GRAPH_WIDTH / 2 - (minX + maxX) / 2, y: GRAPH_HEIGHT / 2 - (minY + maxY) / 2 };
 }
 
-function DraggableGraphNode({
+const DraggableGraphNode = memo(function DraggableGraphNode({
   node,
   position,
+  dragOffset,
   selected,
   isSpotlight,
   dimmed,
-  meta,
   impactTag,
   hasPatch = false,
   onSelectNode,
 }: {
   node: WorkspaceNode;
   position: { x: number; y: number };
+  dragOffset?: { x: number; y: number } | null;
   selected: boolean;
   isSpotlight: boolean;
   dimmed: boolean;
-  meta: RotScoreMeta;
   impactTag?: 'Direct impact' | 'Downstream sink';
   hasPatch?: boolean;
   onSelectNode: (nodeId: string) => void;
@@ -168,6 +168,7 @@ function DraggableGraphNode({
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: node.id,
   });
+  const meta = useMemo(() => rotScoreMeta(node.rotScore), [node.rotScore]);
 
   return (
     <article
@@ -199,11 +200,13 @@ function DraggableGraphNode({
       style={{
         left: position.x,
         top: position.y,
+        transform: dragOffset ? `translate3d(${Math.round(dragOffset.x)}px, ${Math.round(dragOffset.y)}px, 0)` : undefined,
+        willChange: dragOffset ? 'transform' : undefined,
         touchAction: 'none',
       }}
     >
       {impactTag && <span className="absolute -top-2 left-3 rounded-full bg-skyAccent px-2 py-0.5 font-mono text-[9px] font-medium text-white shadow-sm">{impactTag}</span>}
-      {hasPatch && <span className="absolute -top-2 right-3 rounded-full bg-emerald px-2 py-0.5 font-mono text-[9px] font-bold tracking-wide text-white shadow-2xs">PATCH READY</span>}
+      {hasPatch && <span className="absolute -top-2 right-3 rounded-full bg-emerald px-2 py-0.5 font-mono text-[9px] font-bold tracking-wide text-white shadow-2xs">{/* patch indicator */}PATCH READY</span>}
       <div className="flex items-start justify-between gap-3 font-mono text-[10px]">
         <div className="flex items-center gap-1.5 text-muted">
           <GripVertical size={13} className="shrink-0 text-muted/50" aria-hidden="true" />
@@ -219,7 +222,7 @@ function DraggableGraphNode({
       </div>
     </article>
   );
-}
+});
 
 function GraphViewport({
   specimen,
@@ -250,6 +253,11 @@ function GraphViewport({
 }) {
   const viewportRef = useRef<HTMLElement>(null);
   const dragRef = useRef<{ pointerId: number; x: number; y: number; cameraX: number; cameraY: number; moved: boolean } | null>(null);
+  const dragRafRef = useRef<number | null>(null);
+  const dragTargetRef = useRef<{ id: string; x: number; y: number } | null>(null);
+  const panRafRef = useRef<number | null>(null);
+  const panTargetRef = useRef<{ x: number; y: number } | null>(null);
+
   const [nodePositions, setNodePositions] = useState<Record<string, { x: number; y: number }>>({});
   const [activeDrag, setActiveDrag] = useState<{ id: string; x: number; y: number } | null>(null);
 
@@ -258,6 +266,13 @@ function GraphViewport({
     setNodePositions({});
     setActiveDrag(null);
   }, [resetKey]);
+
+  useEffect(() => {
+    return () => {
+      if (dragRafRef.current !== null) cancelAnimationFrame(dragRafRef.current);
+      if (panRafRef.current !== null) cancelAnimationFrame(panRafRef.current);
+    };
+  }, []);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -268,13 +283,13 @@ function GraphViewport({
   );
 
   const validNodes = specimen?.nodes ?? [];
-  const nodeIds = new Set(validNodes.map((node) => node.id));
-  const validEdges = (specimen?.edges ?? []).filter(
+  const nodeIds = useMemo(() => new Set(validNodes.map((node) => node.id)), [validNodes]);
+  const validEdges = useMemo(() => (specimen?.edges ?? []).filter(
     (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target),
-  );
-  const positions = new Map(validNodes.map((node) => [node.id, node]));
-  const spotlight = new Set(spotlightNodeIds.filter((id) => nodeIds.has(id)));
-  const offset = centerOffset(validNodes);
+  ), [specimen?.edges, nodeIds]);
+  const positions = useMemo(() => new Map(validNodes.map((node) => [node.id, node])), [validNodes]);
+  const spotlight = useMemo(() => new Set(spotlightNodeIds.filter((id) => nodeIds.has(id))), [spotlightNodeIds, nodeIds]);
+  const offset = useMemo(() => centerOffset(validNodes), [validNodes]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -295,26 +310,30 @@ function GraphViewport({
     return () => viewport.removeEventListener('wheel', handleWheel);
   }, [camera, onCameraChange]);
 
-
-  const getNodePos = (node: WorkspaceNode) => {
-    const base = nodePositions[node.id] ?? node.position;
-    if (activeDrag && activeDrag.id === node.id) {
-      return { x: base.x + activeDrag.x, y: base.y + activeDrag.y };
-    }
-    return base;
-  };
-
   const handleDragMove = (event: DragMoveEvent) => {
     if (event.active) {
-      setActiveDrag({
+      dragTargetRef.current = {
         id: String(event.active.id),
         x: event.delta.x / camera.scale,
         y: event.delta.y / camera.scale,
-      });
+      };
+      if (dragRafRef.current === null) {
+        dragRafRef.current = requestAnimationFrame(() => {
+          dragRafRef.current = null;
+          if (dragTargetRef.current) {
+            setActiveDrag(dragTargetRef.current);
+          }
+        });
+      }
     }
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
+    if (dragRafRef.current !== null) {
+      cancelAnimationFrame(dragRafRef.current);
+      dragRafRef.current = null;
+    }
+    dragTargetRef.current = null;
     const { active, delta } = event;
     const nodeId = String(active.id);
     const baseNode = positions.get(nodeId);
@@ -334,8 +353,46 @@ function GraphViewport({
   };
 
   const handleDragCancel = () => {
+    if (dragRafRef.current !== null) {
+      cancelAnimationFrame(dragRafRef.current);
+      dragRafRef.current = null;
+    }
+    dragTargetRef.current = null;
     setActiveDrag(null);
   };
+
+  // Precompute static edge geometric paths so drag frames do almost zero math
+  const staticEdges = useMemo(() => {
+    return validEdges.map((edge) => {
+      const source = positions.get(edge.source);
+      const target = positions.get(edge.target);
+      if (!source || !target) return null;
+      const sourcePos = nodePositions[edge.source] ?? source.position;
+      const targetPos = nodePositions[edge.target] ?? target.position;
+      const sourceX = sourcePos.x + NODE_WIDTH;
+      const sourceY = sourcePos.y + NODE_HEIGHT / 2;
+      const targetX = targetPos.x;
+      const targetY = targetPos.y + NODE_HEIGHT / 2;
+      const bend = Math.max(48, Math.abs(targetX - sourceX) * 0.45);
+      const active = selectedNodeId === edge.source || selectedNodeId === edge.target || spotlight.has(edge.target);
+      const spotlightEdge = spotlight.size > 0 && spotlight.has(edge.target);
+      const edgeColor = spotlightEdge ? '#0284C7' : active ? '#111113' : '#D4D4D8';
+      const hidden = visibleNodeIds && (!visibleNodeIds.has(edge.source) || !visibleNodeIds.has(edge.target));
+      return {
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        sourceX,
+        sourceY,
+        targetX,
+        targetY,
+        edgeColor,
+        strokeWidth: selectedNodeId && active ? 1.8 : 1.2,
+        opacity: hidden ? 0.08 : 1,
+        d: `M ${sourceX} ${sourceY} C ${sourceX + bend} ${sourceY}, ${targetX - bend} ${targetY}, ${targetX} ${targetY}`,
+      };
+    }).filter((item): item is NonNullable<typeof item> => Boolean(item));
+  }, [validEdges, positions, nodePositions, selectedNodeId, spotlight, visibleNodeIds]);
 
   return (
     <DndContext
@@ -372,16 +429,36 @@ function GraphViewport({
           const dx = event.clientX - drag.x;
           const dy = event.clientY - drag.y;
           if (Math.abs(dx) > 4 || Math.abs(dy) > 4) drag.moved = true;
-          onCameraChange({ ...camera, x: drag.cameraX + dx, y: drag.cameraY + dy });
+          panTargetRef.current = { x: drag.cameraX + dx, y: drag.cameraY + dy };
+          if (panRafRef.current === null) {
+            panRafRef.current = requestAnimationFrame(() => {
+              panRafRef.current = null;
+              if (panTargetRef.current) {
+                onCameraChange({ ...camera, x: panTargetRef.current.x, y: panTargetRef.current.y });
+              }
+            });
+          }
         }}
         onPointerUp={(event) => {
+          if (panRafRef.current !== null) {
+            cancelAnimationFrame(panRafRef.current);
+            panRafRef.current = null;
+          }
+          panTargetRef.current = null;
           const drag = dragRef.current;
           if (drag?.pointerId !== event.pointerId) return;
           if (!drag.moved) onSelectNode(null);
           dragRef.current = null;
           viewportRef.current?.releasePointerCapture(event.pointerId);
         }}
-        onPointerCancel={() => { dragRef.current = null; }}
+        onPointerCancel={() => {
+          if (panRafRef.current !== null) {
+            cancelAnimationFrame(panRafRef.current);
+            panRafRef.current = null;
+          }
+          panTargetRef.current = null;
+          dragRef.current = null;
+        }}
         data-selected-node={selectedNodeId ?? undefined}
         data-spotlight-count={spotlight.size}
         data-camera-x={camera.x}
@@ -392,22 +469,26 @@ function GraphViewport({
         {specimen ? (
           <div className="absolute left-1/2 top-1/2 h-[1600px] w-[1200px] motion-reduce:transition-none" style={{ willChange: 'transform', transform: `translate(-50%, -50%) translate3d(${camera.x}px, ${camera.y}px, 0) scale(${camera.scale}) translate(${offset.x}px, ${offset.y}px)` }}>
             <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible" viewBox={`0 0 ${GRAPH_WIDTH} ${GRAPH_HEIGHT}`} role="img" aria-label="Edges between source files">
-              {validEdges.map((edge) => {
-                const source = positions.get(edge.source);
-                const target = positions.get(edge.target);
-                if (!source || !target) return null;
-                const sourcePos = getNodePos(source);
-                const targetPos = getNodePos(target);
-                const sourceX = sourcePos.x + NODE_WIDTH;
-                const sourceY = sourcePos.y + NODE_HEIGHT / 2;
-                const targetX = targetPos.x;
-                const targetY = targetPos.y + NODE_HEIGHT / 2;
-                const bend = Math.max(48, Math.abs(targetX - sourceX) * 0.45);
-                const active = selectedNodeId === edge.source || selectedNodeId === edge.target || spotlight.has(edge.target);
-                const spotlightEdge = spotlight.size > 0 && spotlight.has(edge.target);
-                const edgeColor = spotlightEdge ? '#0284C7' : active ? '#111113' : '#D4D4D8';
-                const hidden = visibleNodeIds && (!visibleNodeIds.has(edge.source) || !visibleNodeIds.has(edge.target));
-                return <path key={edge.id} d={`M ${sourceX} ${sourceY} C ${sourceX + bend} ${sourceY}, ${targetX - bend} ${targetY}, ${targetX} ${targetY}`} fill="none" stroke={edgeColor} strokeWidth={selectedNodeId && active ? 1.8 : 1.2} opacity={hidden ? 0.08 : 1} />;
+              {staticEdges.map((edge) => {
+                let d = edge.d;
+                if (activeDrag && (edge.source === activeDrag.id || edge.target === activeDrag.id)) {
+                  const sx = edge.source === activeDrag.id ? edge.sourceX + activeDrag.x : edge.sourceX;
+                  const sy = edge.source === activeDrag.id ? edge.sourceY + activeDrag.y : edge.sourceY;
+                  const tx = edge.target === activeDrag.id ? edge.targetX + activeDrag.x : edge.targetX;
+                  const ty = edge.target === activeDrag.id ? edge.targetY + activeDrag.y : edge.targetY;
+                  const bend = Math.max(48, Math.abs(tx - sx) * 0.45);
+                  d = `M ${sx} ${sy} C ${sx + bend} ${sy}, ${tx - bend} ${ty}, ${tx} ${ty}`;
+                }
+                return (
+                  <path
+                    key={edge.id}
+                    d={d}
+                    fill="none"
+                    stroke={edge.edgeColor}
+                    strokeWidth={edge.strokeWidth}
+                    opacity={edge.opacity}
+                  />
+                );
               })}
             </svg>
             {validNodes.map((node) => {
@@ -417,18 +498,18 @@ function GraphViewport({
               const focusId = selectedNodeId ?? impactOriginId;
               const directImpact = focusId !== null && validEdges.some((edge) => edge.source === focusId && edge.target === node.id);
               const impactTag = directImpact ? 'Direct impact' : isSpotlight && node.id !== focusId ? 'Downstream sink' : undefined;
-              const meta = rotScoreMeta(node.rotScore);
-              const pos = getNodePos(node);
+              const basePos = nodePositions[node.id] ?? node.position;
+              const dragOffset = activeDrag?.id === node.id ? activeDrag : null;
               const hasPatch = Boolean(synthesizedPatches?.[node.path]);
               return (
                 <DraggableGraphNode
                   key={node.id}
                   node={node}
-                  position={pos}
+                  position={basePos}
+                  dragOffset={dragOffset}
                   selected={selected}
                   isSpotlight={isSpotlight}
                   dimmed={dimmed}
-                  meta={meta}
                   impactTag={impactTag}
                   hasPatch={hasPatch}
                   onSelectNode={onSelectNode}
@@ -908,7 +989,7 @@ function WorkspaceContent() {
     return () => window.clearTimeout(timer);
   }, [searchInput, searchQuery]);
 
-  const selectNode = (nodeId: string | null) => {
+  const selectNode = useCallback((nodeId: string | null) => {
     if (nodeId === null) {
       setSpotlightNodeIds([]);
       setImpactOriginId(null);
@@ -920,7 +1001,7 @@ function WorkspaceContent() {
       setImpactOriginId(null);
       setSelectedNodeId(nodeId);
     }
-  };
+  }, [specimen]);
 
   const visibleNodeIds = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
