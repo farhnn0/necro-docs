@@ -91,6 +91,17 @@ describe('3. dangerouslySetInnerHTML is judged by what it receives', () => {
     expect(spread.kind).toBe('unsafe-html');
   });
 
+  it('judges DOM sinks (innerHTML, insertAdjacentHTML, document.write) by what they receive', () => {
+    const kinds = (code: string) => scanAst('m.tsx', code).findings.map((f) => [f.kind, f.line]);
+    expect(kinds(src('async function draw(el: HTMLElement, svg: string) {', '  el.innerHTML = safeSanitize(svg);', '}'))).toEqual([['html-notice', 2]]);
+    expect(kinds('function a(el: HTMLElement) { el.insertAdjacentHTML("beforeend", DOMPurify.sanitize(x)); }')).toEqual([['html-notice', 1]]);
+    expect(kinds('function a(el: HTMLElement) { el.outerHTML = "<hr>"; }')).toEqual([['html-notice', 1]]);
+    expect(kinds('function a(el: HTMLElement, html: string) { el.innerHTML = html; document.write(html); }')).toEqual([['unsafe-html', 1], ['unsafe-html', 1]]);
+    expect(kinds('function a(el: HTMLElement, log: { write(s: string): void }) { log.write("x"); if (el.innerHTML === "") return; }')).toEqual([]);
+    const raw = scanAst('m.ts', 'function a(el: HTMLElement, html: string) { el.innerHTML = html; }').findings[0];
+    expect(raw.text).toContain('innerHTML receives `html`, which does not pass through a recognized sanitizer');
+  });
+
   it('puts the line number on the attribute', () => {
     const finding = scanAst('c.tsx', src('export const C = () => (', '  <div>', '    <p dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(x) }} />', '  </div>', ');')).findings[0];
     expect(finding.line).toBe(3);
@@ -143,6 +154,13 @@ describe('4. actionable suggestions', () => {
     expect(finding.suggestion).toContain('user.ts (createUser, updateUser, listUser)');
     expect(finding.suggestion).toContain('barrel');
     expect(scanAst('small.ts', 'export const a = 1;\n').findings).toEqual([]);
+  });
+
+  it('points a monolith at the one function that holds most of the file instead of regrouping exports', () => {
+    const body = `export const TABS = ["a"];\nexport default function Workspace() {\n${'  step();\n'.repeat(1600)}}\n`;
+    const finding = scanAst('page.tsx', body).findings.find((f) => f.kind === 'monolith')!;
+    expect(finding.suggestion).toContain('Workspace() alone spans 1602 of 1603 lines (line 2)');
+    expect(finding.suggestion).not.toContain('barrel');
   });
 
   it('counts exact AST branches and ignores optional types and keyword-named properties', () => {

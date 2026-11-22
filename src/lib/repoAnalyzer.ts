@@ -787,12 +787,9 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
         issues.push({ ...issue('any', hits[0], `Line ${hits[0]}: \`any\` is used ${hits.length} times, which disables type checking.`), lines: hits });
       }
     }
-    // Raw HTML injection is an XSS risk unless the value is sanitized first. React's dangerouslySetInnerHTML is
-    // judged by the AST pass (sanitizer / static dictionary / unsafe); the regex only keeps it when the AST is unavailable.
-    const sinks = ast
-      ? /\.(?:inner|outer)HTML\s*=(?!=)|\bdocument\.write\s*\(|\.insertAdjacentHTML\s*\(/
-      : /\bdangerouslySetInnerHTML\b|\.(?:inner|outer)HTML\s*=(?!=)|\bdocument\.write\s*\(|\.insertAdjacentHTML\s*\(/;
-    const html = firstLine(sinks, bare);
+    // Raw HTML sinks (dangerouslySetInnerHTML, innerHTML/outerHTML, insertAdjacentHTML, document.write) are judged by
+    // the AST pass by what they receive; the regex only runs when the AST is unavailable and cannot see sanitizers.
+    const html = ast ? { count: 0, line: 0, lines: [] } : firstLine(/\bdangerouslySetInnerHTML\b|\.(?:inner|outer)HTML\s*=(?!=)|\bdocument\.write\s*\(|\.insertAdjacentHTML\s*\(/, bare);
     if (html.count > 0) {
       issues.push({ ...issue('unsafe-html', html.line, `Line ${html.line}: Raw HTML is injected into the page${html.count > 1 ? ` (${html.count} places)` : ''}; unsanitized input here is an XSS risk.`), lines: html.lines });
     }
@@ -1122,7 +1119,7 @@ const RECOMMENDATIONS: Record<IssueKind, (line: number | null) => string> = {
   monolith: () => 'Split the file by domain and keep it as a barrel that re-exports the pieces, so imports do not change.',
   'prompt-drift': (l) => `Build the schema text at line ${l} from the real type (or validate the model output against it) so the prompt cannot drift from the type.`,
   'fallback-chain': (l) => `Log the first-stage failure at line ${l} at debug level, so a fallback that always fires is visible.`,
-  'html-notice': (l) => `Keep the sanitizer or static source at line ${l} on every path that reaches dangerouslySetInnerHTML.`,
+  'html-notice': (l) => `Keep the sanitizer or static source at line ${l} on every path that reaches the HTML sink.`,
 };
 
 /** Deterministic explanation used when no AI provider is configured, or when it fails. */
