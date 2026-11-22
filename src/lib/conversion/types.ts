@@ -1,4 +1,4 @@
-import type { ApiResponse } from '@/lib/types';
+import type { ApiResponse, RepoFinding } from '@/lib/types';
 import type { RepoCoverage } from '@/lib/repoAnalyzer';
 
 export type PresetId = 'payment' | 'scraper' | 'realtime';
@@ -28,7 +28,9 @@ export interface PresetWorkspaceNode extends WorkspaceNodeBase {
 export interface IngestedWorkspaceNode extends WorkspaceNodeBase {
   kind: 'ingested';
   lastCommit: string;
-  findings: string[];
+  findings: RepoFinding[];
+  /** Neutral facts shown when there is nothing to report as a problem. */
+  notes: string[];
   summary: string;
   recommendation: string;
   codeExcerpt: string;
@@ -74,6 +76,8 @@ export interface IngestedSpecimen {
   edges: WorkspaceEdge[];
   /** Null for analyses stored before coverage was reported. */
   coverage: RepoCoverage | null;
+  /** Package names from the root package.json. */
+  dependencies: string[];
 }
 export type Specimen = PresetSpecimen | IngestedSpecimen;
 

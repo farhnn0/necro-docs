@@ -112,6 +112,7 @@ export function convertRepoAnalysis(analysis: RepoAnalysis): IngestedSpecimen {
       position: { x: node.x, y: node.y },
       lastCommit: node.lastCommit,
       findings: node.findings,
+      notes: node.notes,
       summary: node.summary,
       recommendation: node.recommendation,
       codeExcerpt: node.code,
@@ -123,6 +124,7 @@ export function convertRepoAnalysis(analysis: RepoAnalysis): IngestedSpecimen {
       .filter((edge) => ids.has(edge.from) && ids.has(edge.to))
       .map((edge): WorkspaceEdge => ({ id: `${edge.from}->${edge.to}`, source: edge.from, target: edge.to })),
     coverage: isCoverage(analysis.coverage) ? analysis.coverage : null,
+    dependencies: Array.isArray(analysis.dependencies) ? analysis.dependencies.filter((name) => typeof name === 'string') : [],
   };
 }
 /** `sessionStorage` key holding the last analysis, written by the landing page and read by the workspace. */
@@ -152,7 +154,12 @@ export function isRepoAnalysis(value: unknown): value is RepoAnalysis {
     const n = node as Record<string, unknown>;
     return typeof n.id === 'string' && typeof n.name === 'string' && typeof n.path === 'string' && typeof n.code === 'string'
       && typeof n.lastCommit === 'string' && isFiniteNumber(n.loc) && isFiniteNumber(n.rot) && isFiniteNumber(n.x) && isFiniteNumber(n.y)
-      && Array.isArray(n.findings) && n.findings.every((f) => typeof f === 'string');
+      && Array.isArray(n.notes) && n.notes.every((note) => typeof note === 'string')
+      // Analyses stored before findings were structured fail here and are analyzed again.
+      && Array.isArray(n.findings) && n.findings.every((f) => f !== null && typeof f === 'object'
+        && typeof (f as Record<string, unknown>).kind === 'string' && typeof (f as Record<string, unknown>).text === 'string'
+        && typeof (f as Record<string, unknown>).suggestion === 'string' && Array.isArray((f as Record<string, unknown>).lines)
+        && ((f as Record<string, unknown>).line === null || isFiniteNumber((f as Record<string, unknown>).line)));
   });
   const edgesOk = v.edges.every((edge) => edge !== null && typeof edge === 'object'
     && typeof (edge as Record<string, unknown>).from === 'string' && typeof (edge as Record<string, unknown>).to === 'string');
@@ -204,7 +211,7 @@ export function quickQuestions(specimen: Specimen): readonly PresetQuickQuestion
 
 export function diagnosisForNode(node: IngestedWorkspaceNode, specimen: IngestedSpecimen): string {
   const dependents = specimen.edges.filter((edge) => edge.target === node.id).length;
-  const lead = node.findings[0] ?? `${node.linesOfCode} lines of code.`;
+  const lead = node.findings[0]?.text ?? `${node.linesOfCode} lines of code.`;
   return `${node.name} has a rot score of ${node.rotScore}. ${lead} ${dependents} file${dependents === 1 ? '' : 's'} depend${dependents === 1 ? 's' : ''} on it, so review its callers before changing it.`;
 }
 export function buildSeanceRequest(question: string, selectedNodeId: string | null, specimen: Specimen): SeanceRequest {

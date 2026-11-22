@@ -103,7 +103,7 @@ describe('analyzeRepository', () => {
     const gh = fakeGitHub(SHOP);
     const result = await analyzeRepository('Acme/Shop', { token: '', fetchImpl: gh.impl });
 
-    expect(Object.keys(result).sort()).toEqual(['coverage', 'defaultBranch', 'edges', 'nodes', 'overallRot', 'rotSummary', 'title']);
+    expect(Object.keys(result).sort()).toEqual(['coverage', 'defaultBranch', 'dependencies', 'edges', 'nodes', 'overallRot', 'rotSummary', 'title']);
     // 3 analyzed + the test file, node_modules file and config file; .d.ts and README are not source.
     expect(result.coverage).toEqual({
       totalFiles: 6, analyzed: 3, featured: 3, fileLimit: 400, treeTruncated: false,
@@ -116,14 +116,15 @@ describe('analyzeRepository', () => {
     // Tests, node_modules, config and .d.ts files are filtered out.
     expect(result.nodes.map((n) => n.path)).toEqual(['src/billing/charge.ts', 'src/lib/db.ts', 'src/server.ts']);
     for (const node of result.nodes) {
-      expect(Object.keys(node).sort()).toEqual(['code', 'explainedBy', 'featured', 'findings', 'id', 'lastCommit', 'loc', 'name', 'path', 'recommendation', 'rot', 'summary', 'x', 'y']);
+      expect(Object.keys(node).sort()).toEqual(['code', 'explainedBy', 'featured', 'findings', 'id', 'lastCommit', 'loc', 'name', 'notes', 'path', 'recommendation', 'rot', 'summary', 'x', 'y']);
       expect(node.featured).toBe(true); // small repositories show every file
       expect(node.explainedBy).toBe('static'); // no AI provider in unit tests
       expect(node.id).toBe(node.path);
       expect(node.rot).toBeGreaterThanOrEqual(0);
       expect(node.rot).toBeLessThanOrEqual(100);
-      expect(node.findings.length).toBeGreaterThanOrEqual(2);
-      expect(node.findings.length).toBeLessThanOrEqual(4);
+      // Findings are problems only; neutral facts ("no swallowed errors", complexity) are notes.
+      expect(node.findings.every((f) => f.source === 'static' && f.suggestion.length > 0)).toBe(true);
+      expect(node.notes.length).toBeGreaterThanOrEqual(1);
     }
 
     // importer -> imported, including the `@/` alias which maps to src/.
@@ -137,8 +138,8 @@ describe('analyzeRepository', () => {
   it('reports real line numbers for the empty catch and the TODO, and scores that file highest', async () => {
     const result = await analyzeRepository('Acme/Shop', { token: '', fetchImpl: fakeGitHub(SHOP).impl });
     const charge = result.nodes.find((n) => n.path === 'src/billing/charge.ts')!;
-    expect(charge.findings[0]).toBe('Line 6: Empty catch block swallows exceptions silently.');
-    expect(charge.findings.some((f) => f.startsWith('Line 8: TODO comment'))).toBe(true);
+    expect(charge.findings[0].text).toBe('Line 6: Empty catch block swallows exceptions silently.');
+    expect(charge.findings.some((f) => f.kind === 'debt' && f.line === 8)).toBe(true);
     expect(charge.code).toContain('} catch (e) {');
     expect(result.nodes.every((n) => n.rot <= charge.rot)).toBe(true);
     // 18 (empty catch) + 8 (TODO) + coupling for 2 links.
@@ -217,7 +218,7 @@ describe('analyzeRepository', () => {
     };
     const result = await analyzeRepository('Acme/Shop', { token: '', fetchImpl: fakeGitHub(py).impl });
     expect(result.edges).toEqual([{ from: 'app/main.py', to: 'app/util.py' }]);
-    expect(result.nodes.find((n) => n.path === 'app/main.py')!.findings[0]).toBe('Line 7: Empty except block swallows exceptions silently.');
+    expect(result.nodes.find((n) => n.path === 'app/main.py')!.findings[0].text).toBe('Line 7: Empty except block swallows exceptions silently.');
   });
 
   it('sends the Bearer token only when one is provided', async () => {
@@ -228,6 +229,56 @@ describe('analyzeRepository', () => {
     const anonymous = fakeGitHub(SHOP);
     await analyzeRepository('Acme/Shop', { token: '', fetchImpl: anonymous.impl });
     expect(anonymous.calls.every((c) => !('Authorization' in c.headers))).toBe(true);
+  });
+
+  it('resolves tsconfig path aliases into edges and reports the package names', async () => {
+    const files: Files = {
+      // Comments and a trailing comma: tsconfig.json is not strict JSON.
+      'tsconfig.json': '{\n  // aliases\n  "compilerOptions": { "baseUrl": ".", "paths": { "@ui/*": ["src/components/*"], "@db": ["src/lib/db.ts"], }, },\n}',
+      'package.json': '{ "dependencies": { "zod": "^3" }, "devDependencies": { "vitest": "^2" } }',
+      'src/page.tsx': "import { Button } from '@ui/Button';\nimport { db } from '@db';\nimport { z } from 'zod';\nexport const Page = () => <Button onClick={() => db.ping(z)} />;\n",
+      'src/components/Button.tsx': 'export const Button = (props: { onClick: () => void }) => <button onClick={props.onClick} />;\n',
+      'src/lib/db.ts': 'export const db = { ping: (x: unknown) => x };\n',
+    };
+    const result = await analyzeRepository('Acme/Shop', { token: '', fetchImpl: fakeGitHub(files).impl });
+    expect(result.edges).toEqual([
+      { from: 'src/page.tsx', to: 'src/components/Button.tsx' },
+      { from: 'src/page.tsx', to: 'src/lib/db.ts' },
+    ]);
+    expect(result.dependencies).toEqual(['zod', 'vitest']);
+  });
+
+  it('resolves overlapping aliases to the most specific pattern, like TypeScript does', async () => {
+    const files: Files = {
+      'tsconfig.json': '{ "compilerOptions": { "paths": { "@/*": ["src/*"], "@/lib/*": ["packages/lib/*"] } } }',
+      'src/page.ts': "import { db } from '@/lib/db';\nexport const page = db;\n",
+      'src/lib/db.ts': 'export const db = 1;\n',
+      'packages/lib/db.ts': 'export const db = 2;\n',
+    };
+    const result = await analyzeRepository('Acme/Shop', { token: '', fetchImpl: fakeGitHub(files).impl });
+    expect(result.edges).toEqual([{ from: 'src/page.ts', to: 'packages/lib/db.ts' }]);
+  });
+
+  it('keeps scanner findings and shows what the AI adds as unverified notes', async () => {
+    const reply = JSON.stringify({ files: [{ id: 0, path: 'src/billing/charge.ts', summary: 'Charges the customer.', recommendation: 'Rethrow from the catch.', findings: [
+      'Line 6: The catch hides failed inserts.', // same line as the scanner finding: dropped
+      'Line 5: The insert is not awaited inside a transaction.', // shown line the scanner did not report: a note
+      'Line 412: SQL injection in the query builder.', // the file has 10 lines: dropped
+      'The module has no input validation.', // no line: a note, not a finding
+    ] }] });
+    vi.stubGlobal('fetch', (async () => Response.json({ candidates: [{ content: { parts: [{ text: reply }] } }] })) as typeof fetch);
+    vi.stubEnv('GEMINI_API_KEY', 'gem-key');
+    try {
+      const result = await analyzeRepository('Acme/Shop', { token: '', fetchImpl: fakeGitHub(SHOP).impl });
+      const charge = result.nodes.find((n) => n.path === 'src/billing/charge.ts')!;
+      expect(charge.explainedBy).toBe('ai');
+      expect(charge.findings.map((f) => [f.kind, f.line, f.source])).toEqual([['empty-catch', 6, 'static'], ['debt', 8, 'static']]);
+      expect(charge.notes.slice(0, 2)).toEqual(['AI (unverified): Line 5: The insert is not awaited inside a transaction.', 'AI (unverified): The module has no input validation.']);
+      expect(JSON.stringify(charge)).not.toContain('SQL injection');
+    } finally {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    }
   });
 
   it('maps GitHub failures to 404 and 429 codes', async () => {
@@ -255,7 +306,8 @@ describe('analyzeRepository', () => {
       expect(byPath['src/billing/charge.ts'].summary).toBe('Charges the customer and records the ledger row.');
       expect(byPath['src/billing/charge.ts'].recommendation).toBe('Rethrow from the catch at line 6.');
       expect(byPath['src/lib/db.ts'].summary).toBe('Wraps database inserts.');
-      expect(byPath['src/lib/db.ts'].findings.length).toBeGreaterThanOrEqual(2); // static findings fill the empty list
+      // The scanner finding survives the AI reply; the AI remark about the same line is not a second finding.
+      expect(byPath['src/billing/charge.ts'].findings.map((f) => [f.kind, f.line, f.source])).toEqual([['empty-catch', 6, 'static'], ['debt', 8, 'static']]);
       expect(byPath['src/server.ts'].summary).toMatch(/^server\.ts is an entry point/); // truncated entry: static fallback
       expect(aiCalls).toHaveLength(1);
       expect(aiCalls[0].url).not.toContain('gem-key');
@@ -311,11 +363,11 @@ describe('static scanner fairness', () => {
       ].join('\n'),
       'src/silent.ts': 'export function a() { try { x(); } catch {} }\nexport function b() { try { y(); } catch {} }\nexport function c() { try { return z(); } catch { return null; } }\n',
     });
-    const fallback = nodes['src/fallback.ts'].findings.join('\n');
+    const fallback = nodes['src/fallback.ts'].findings.map((f) => f.text).join('\n');
     expect(fallback).not.toMatch(/Empty catch|swallow/);
     expect(fallback).toContain('Line 11: catch block deliberately ignores the error');
 
-    const silent = nodes['src/silent.ts'].findings;
+    const silent = nodes['src/silent.ts'].findings.map((f) => f.text);
     expect(silent[0]).toBe('Line 1: Empty catch block swallows exceptions silently (2 places: lines 1, 2).');
     expect(silent.some((f) => f.startsWith('Line 3: catch block returns a placeholder value'))).toBe(true);
     expect(nodes['src/silent.ts'].rot).toBeGreaterThan(nodes['src/fallback.ts'].rot);
@@ -327,11 +379,11 @@ describe('static scanner fairness', () => {
       'src/types.ts': `export ${schema.join('\n')}\n`,
       'src/ai.ts': ['export const prompt = `Reply with JSON shaped as:', ...schema, 'Answer only with JSON.`;', ''].join('\n'),
     });
-    const ai = nodes['src/ai.ts'].findings.join('\n');
+    const ai = nodes['src/ai.ts'].findings.map((f) => f.text).join('\n');
     expect(ai).toContain('Prompt Schema Drift Risk');
     expect(ai).toContain('`AnalysisResult` (declared in src/types.ts)');
     expect(ai).not.toMatch(/same \d\+ line block/);
-    expect(nodes['src/types.ts'].findings.join('\n')).not.toMatch(/same \d\+ line block/);
+    expect(nodes['src/types.ts'].findings.map((f) => f.text).join('\n')).not.toMatch(/same \d\+ line block/);
     // Informational only: no rot points beyond the baseline of an otherwise trivial file.
     expect(nodes['src/ai.ts'].rot).toBeLessThanOrEqual(2);
   });
@@ -357,12 +409,12 @@ describe('static scanner fairness', () => {
         '',
       ].join('\n'),
     });
-    const parse = nodes['src/parse.ts'].findings.join('\n');
+    const parse = nodes['src/parse.ts'].findings.map((f) => f.text).join('\n');
     expect(parse).toContain('Line 8: Empty catch block swallows exceptions silently.');
     expect(parse).not.toContain('Line 3: Empty catch');
     expect(parse).toContain('Line 3: catch is the first stage of a multi-stage fallback');
 
-    const post = nodes['src/Post.tsx'].findings.join('\n');
+    const post = nodes['src/Post.tsx'].findings.map((f) => f.text).join('\n');
     expect(post).toContain('Line 2: dangerouslySetInnerHTML renders `p.html`, which is not sanitized');
     expect(post).toContain('Line 1: dangerouslySetInnerHTML receives HTML sanitized by safeSanitize()');
   });
@@ -403,10 +455,10 @@ describe('static scanner fairness', () => {
       '}', // 15
     ].join('\n');
     const nodes = await analyze({ 'src/page.tsx': jsx, 'src/walk.ts': loops });
-    expect(nodes['src/page.tsx'].findings.join('\n')).not.toMatch(/Control flow is nested/);
-    expect(nodes['src/page.tsx'].findings.join('\n')).toContain('control flow nested up to 0 levels');
+    expect(nodes['src/page.tsx'].findings.map((f) => f.text).join('\n')).not.toMatch(/Control flow is nested/);
+    expect(nodes['src/page.tsx'].notes.join('\n')).toContain('control flow nested up to 0 levels');
     expect(nodes['src/page.tsx'].rot).toBe(0);
-    expect(nodes['src/walk.ts'].findings[0]).toBe('Line 6: Control flow is nested 5 levels deep (if/loop/try inside each other).');
+    expect(nodes['src/walk.ts'].findings[0].text).toBe('Line 6: Control flow is nested 5 levels deep (if/loop/try inside each other).');
   });
 
   it('gives type-only modules no rot for being widely imported', async () => {
@@ -432,8 +484,8 @@ describe('static scanner fairness', () => {
       'src/b.ts': `export async function b(response: Response, controller: any) {\n${shared}\n}\n`,
     });
     const client = nodes['src/client.ts'];
-    expect(client.findings[0]).toBe('Line 1: Hard-coded credential (API key or private key format) is committed to the repository.');
+    expect(client.findings[0].text).toBe('Line 1: Hard-coded credential (API key or private key format) is committed to the repository.');
     expect(JSON.stringify([client.findings, client.summary, client.recommendation])).not.toContain(key);
-    expect(nodes['src/a.ts'].findings.join('\n')).toContain('Line 2: The same 6+ line block also appears in src/b.ts (line 2)');
+    expect(nodes['src/a.ts'].findings.map((f) => f.text).join('\n')).toContain('Line 2: The same 6+ line block also appears in src/b.ts (line 2)');
   });
 });

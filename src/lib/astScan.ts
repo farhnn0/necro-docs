@@ -31,6 +31,25 @@ export interface AstScan {
   promptTypeRefs: Array<{ name: string; line: number }>;
   /** Refactoring advice for the deepest function, when control flow is nested at least NEST_HINT_DEPTH levels. */
   nestingHint: string | null;
+  /** Per-line views with real line numbers; see `lineViews`. */
+  views: LineViews;
+  /** 1-based line of every `any` type keyword. */
+  anyLines: number[];
+  /** 1-based line of every `@ts-ignore` / `@ts-nocheck` directive: a comment whose last line starts with it, as TypeScript reads it. */
+  suppressionLines: number[];
+  /** The function with the most lines (declaration to closing brace). */
+  longestFunction: { name: string; line: number; length: number } | null;
+}
+
+export interface LineViews {
+  /** Source lines as written. */
+  lines: string[];
+  /** Comments blanked, string literals kept (used to read import specifiers). */
+  code: string[];
+  /** Like `code`, with string, template, regex and JSX text contents blanked (used for counting and brace matching). */
+  bare: string[];
+  /** Comment text only. */
+  comment: string[];
 }
 
 const MONOLITH_LINES = 1500;
@@ -156,6 +175,7 @@ function controlDepth(node: ts.Node, current = 0): number {
 }
 
 function functionName(fn: ts.FunctionLikeDeclaration, sf: ts.SourceFile): string {
+  if (ts.isConstructorDeclaration(fn)) return 'constructor';
   if (fn.name) return fn.name.getText(sf);
   const parent = fn.parent;
   if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) return parent.name.text;
@@ -215,11 +235,61 @@ function monolithAdvice(sf: ts.SourceFile): { count: number; plan: string } {
   return { count: declared.length, plan };
 }
 
+const splitLines = (text: string): string[] => {
+  const lines = text.split(/\r\n|\r|\n/);
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  return lines;
+};
+
+/**
+ * Builds the line views from real tokens, so a quote inside a regex literal or JSX text can never be
+ * mistaken for the start of a string. Every view keeps the original columns: removed text becomes spaces.
+ */
+function lineViews(sf: ts.SourceFile, suppressionLines: number[]): LineViews {
+  const text = sf.text;
+  // UTF-16 units, not code points: every position below is a string index, and an emoji is two of them.
+  const code = text.split('');
+  const bare = text.split('');
+  const comment: string[] = text.split('').map((ch) => (ch === '\n' || ch === '\r' ? ch : ' '));
+  const blank = (target: string[], from: number, to: number) => {
+    for (let i = from; i < to; i++) if (target[i] !== '\n' && target[i] !== '\r') target[i] = ' ';
+  };
+  const seen = new Set<number>();
+  const visit = (node: ts.Node) => {
+    const start = node.getStart(sf);
+    if (node.kind === ts.SyntaxKind.JsxText) blank(bare, node.pos, node.end);
+    else {
+      // Every comment sits in the trivia before some token (the end-of-file token holds the last ones). TypeScript
+      // splits that trivia into "trailing" (same line as the previous token) and "leading" (after a line break).
+      const collect = (pos: number, end: number, kind: ts.CommentKind) => {
+        if (seen.has(pos)) return;
+        seen.add(pos);
+        blank(code, pos, end);
+        blank(bare, pos, end);
+        const innerEnd = kind === ts.SyntaxKind.MultiLineCommentTrivia ? end - 2 : end;
+        for (let i = pos + 2; i < innerEnd; i++) comment[i] = text[i];
+        if (/^[\s/*]*@ts-(?:ignore|nocheck)\b/.test(text.slice(pos, end).split('\n').pop() ?? '')) {
+          suppressionLines.push(sf.getLineAndCharacterOfPosition(end - 1).line + 1);
+        }
+      };
+      ts.forEachTrailingCommentRange(text, node.getFullStart(), collect);
+      ts.forEachLeadingCommentRange(text, node.getFullStart(), collect);
+    }
+    if (ts.isRegularExpressionLiteral(node)) blank(bare, start + 1, text.lastIndexOf('/', node.end - 1));
+    else if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateTail(node)) blank(bare, start + 1, node.end - 1);
+    else if (ts.isTemplateHead(node) || ts.isTemplateMiddle(node)) blank(bare, start + 1, node.end - 2);
+    node.getChildren(sf).forEach(visit);
+  };
+  visit(sf);
+  return { lines: splitLines(text), code: splitLines(code.join('')), bare: splitLines(bare.join('')), comment: splitLines(comment.join('')) };
+}
+
 const startLine = (sf: ts.SourceFile, node: ts.Node) => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
 
 export function scanAst(path: string, content: string): AstScan {
   const sf = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true, kindFor(path));
-  const out: AstScan = { findings: [], stringLines: new Set(), fallbackCatchLines: new Set(), declaredTypes: [], promptTypeRefs: [], nestingHint: null };
+  const suppressionLines: number[] = [];
+  const out: AstScan = { findings: [], stringLines: new Set(), fallbackCatchLines: new Set(), declaredTypes: [], promptTypeRefs: [], nestingHint: null, views: lineViews(sf, suppressionLines), anyLines: [], suppressionLines, longestFunction: null };
 
   const literal = (node: ts.Node, text: string) => {
     const first = startLine(sf, node);
@@ -237,6 +307,15 @@ export function scanAst(path: string, content: string): AstScan {
   walk(sf, (node) => {
     if (ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node) || ts.isStringLiteral(node)) {
       literal(node, node.text);
+    } else if (node.kind === ts.SyntaxKind.AnyKeyword) {
+      out.anyLines.push(startLine(sf, node));
+    } else if ((isFunctionLike(node) || ts.isConstructorDeclaration(node) || ts.isAccessor(node)) && node.body && ts.isBlock(node.body)) {
+      const line = startLine(sf, node);
+      const length = sf.getLineAndCharacterOfPosition(node.end).line + 1 - line + 1;
+      if (!out.longestFunction || length > out.longestFunction.length) {
+        const name = functionName(node, sf);
+        out.longestFunction = { name: name === 'this function' ? 'anonymous' : name, line, length };
+      }
     } else if (ts.isTryStatement(node) && node.catchClause && node.catchClause.block.statements.length === 0 && isFirstStage(node, sf)) {
       out.fallbackCatchLines.add(startLine(sf, node.catchClause));
     } else if (ts.isJsxAttribute(node) && node.name.getText(sf) === 'dangerouslySetInnerHTML') {

@@ -108,7 +108,7 @@ export default function SeanceConsole({ specimen, selectedNodeId, onSpotlight }:
 
   const fallback = (question: string) => {
     if (!specimen) return 'Choose a specimen before asking a question.';
-    if (specimen.kind === 'ingested') { const node = specimen.nodes.find((candidate) => candidate.id === selectedNodeId) ?? specimen.nodes[0]; return node ? `${node.name} has a rot score of ${node.rotScore}. ${node.findings[0] ?? 'Review its connected dependencies before changing it.'}` : 'No file is selected yet.'; }
+    if (specimen.kind === 'ingested') { const node = specimen.nodes.find((candidate) => candidate.id === selectedNodeId) ?? specimen.nodes[0]; return node ? `${node.name} has a rot score of ${node.rotScore}. ${node.findings[0]?.text ?? 'Review its connected dependencies before changing it.'}` : 'No file is selected yet.'; }
     const answers = PRESET_FALLBACK_ANSWERS[specimen.id]; const exact = answers.find((item) => item.question === question); if (exact) return exact.answer;
     const referenced = answers.find((item) => item.question.split(' ').some((word) => word.length > 5 && question.toLowerCase().includes(word.toLowerCase().replace(/[^a-z0-9_.-]/gi, '')))); return (referenced ?? answers[0]).answer;
   };

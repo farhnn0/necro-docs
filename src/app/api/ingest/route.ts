@@ -19,8 +19,10 @@
  * ```json
  * {
  *   "title": "owner/repo", "defaultBranch": "main", "rotSummary": "68% infected", "overallRot": 68,
- *   "nodes": [{ "id", "name", "path", "loc", "rot", "lastCommit", "x", "y", "findings", "code" }],
- *   "edges": [{ "from": "importer path", "to": "imported path" }]
+ *   "nodes": [{ "id", "name", "path", "loc", "rot", "lastCommit", "x", "y", "code", "notes": ["neutral fact"],
+ *              "findings": [{ "kind", "line", "lines", "text", "suggestion", "source": "static" | "ai" }] }],
+ *   "edges": [{ "from": "importer path", "to": "imported path" }],
+ *   "dependencies": ["package name from the root package.json"]
  * }
  * ```
  *

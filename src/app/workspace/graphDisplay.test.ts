@@ -14,10 +14,10 @@ import {
 
 const node = (id: string, featured: boolean): IngestedWorkspaceNode => ({
   kind: 'ingested', id, name: id, path: id, linesOfCode: 10, rotScore: 0, position: { x: 0, y: 0 },
-  lastCommit: '', findings: [], summary: '', recommendation: '', codeExcerpt: '', featured, explainedBy: 'static',
+  lastCommit: '', findings: [], notes: [], summary: '', recommendation: '', codeExcerpt: '', featured, explainedBy: 'static',
 });
 const repo = (featured: string[], hidden: string[]): IngestedSpecimen => ({
-  kind: 'ingested', title: 'acme/oms', summary: '', defaultBranch: 'main', repositoryUrl: 'https://github.com/acme/oms', overallRot: 0, coverage: null,
+  kind: 'ingested', title: 'acme/oms', summary: '', defaultBranch: 'main', repositoryUrl: 'https://github.com/acme/oms', overallRot: 0, coverage: null, dependencies: [],
   nodes: [...featured.map((id) => node(id, true)), ...hidden.map((id) => node(id, false))],
   edges: [{ id: 'a->h1', source: 'a', target: 'h1' }, { id: 'a->b', source: 'a', target: 'b' }],
 });
