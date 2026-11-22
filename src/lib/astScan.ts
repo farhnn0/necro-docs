@@ -85,7 +85,7 @@ function walk(node: ts.Node, visit: (node: ts.Node) => boolean | void): void {
 
 type HtmlKind = 'sanitized' | 'static' | 'unsafe';
 
-/** How an `__html` expression is produced. One hop through a same-file `const` is followed. */
+/** How an `__html` expression is produced. One hop through a same-file `const` is followed when that name is declared only once in the file. */
 function classifyHtml(expression: ts.Node, sf: ts.SourceFile, depth = 0): { kind: HtmlKind; via: string } {
   const node = unwrap(expression);
   if (ts.isStringLiteralLike(node)) return { kind: 'static', via: 'a string literal' };
@@ -113,11 +113,15 @@ function classifyHtml(expression: ts.Node, sf: ts.SourceFile, depth = 0): { kind
     return sides.find((s) => s.kind === 'unsafe') ?? sides[0];
   }
   if (ts.isIdentifier(node) && depth < 2) {
-    let found: ts.Expression | undefined;
+    // shortcut: no scope analysis, so a shadowed or reassignable name stays untrusted; upgrade with a TypeChecker if this misses real consts.
+    const decls: ts.Node[] = [];
     walk(sf, (n) => {
-      if (!found && ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === node.text && n.initializer) found = n.initializer;
+      if ((ts.isVariableDeclaration(n) || ts.isParameter(n) || ts.isBindingElement(n)) && ts.isIdentifier(n.name) && n.name.text === node.text) decls.push(n);
     });
-    if (found) return classifyHtml(found, sf, depth + 1);
+    const only = decls.length === 1 ? decls[0] : undefined;
+    if (only && ts.isVariableDeclaration(only) && only.initializer && ts.isVariableDeclarationList(only.parent) && only.parent.flags & ts.NodeFlags.Const) {
+      return classifyHtml(only.initializer, sf, depth + 1);
+    }
   }
   return { kind: 'unsafe', via: node.getText(sf).slice(0, 60) };
 }
@@ -215,7 +219,7 @@ function nestingAdvice(sf: ts.SourceFile): string | null {
 const words = (name: string) => name.replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/[\s_-]+/).filter(Boolean);
 
 /** Groups top-level function names by the noun left after the leading verb: createOrder, updateOrder -> order. */
-function monolithAdvice(sf: ts.SourceFile): { count: number; plan: string } {
+function monolithAdvice(sf: ts.SourceFile, total: number, longest: AstScan['longestFunction']): { count: number; plan: string } {
   const declared: string[] = [];
   for (const s of sf.statements) {
     if (ts.isFunctionDeclaration(s) && s.name) declared.push(s.name.text);
@@ -233,6 +237,10 @@ function monolithAdvice(sf: ts.SourceFile): { count: number; plan: string } {
     groups.set(noun, [...(groups.get(noun) ?? []), name]);
   }
   const clusters = [...groups.entries()].filter(([, list]) => list.length >= 2).sort((a, b) => b[1].length - a[1].length).slice(0, 4);
+  // One function holding most of the file is the real problem; moving declarations around would not shrink it.
+  if (longest && longest.length * 2 >= total) {
+    return { count: declared.length, plan: `${longest.name}() alone spans ${longest.length} of ${total} lines (line ${longest.line}); extract its independent parts (effects, handlers, sub-views or steps) into their own functions or components before splitting the file.` };
+  }
   const plan = clusters.length
     ? `${clusters.map(([noun, list]) => `${noun}.ts (${list.slice(0, 3).join(', ')}${list.length > 3 ? `, +${list.length - 3} more` : ''})`).join('; ')}. Keep this file as a barrel that re-exports them so existing imports keep working.`
     : 'Group the exports by the entity they act on and move each group into its own module; keep this file as a barrel that re-exports them.';
@@ -351,6 +359,19 @@ export function scanAst(path: string, content: string): AstScan {
     if ((ts.isInterfaceDeclaration(s) || ts.isTypeAliasDeclaration(s)) && s.name) out.declaredTypes.push(s.name.text);
   }
 
+  const reportHtml = (line: number, sink: string, value: { kind: HtmlKind; via: string }) => {
+    if (value.kind === 'unsafe') {
+      out.findings.push({ kind: 'unsafe-html', line, text: `Line ${line}: ${sink} receives \`${value.via}\`, which does not pass through a recognized sanitizer in this file; if it can carry user input, this is an XSS risk.` });
+      return;
+    }
+    out.findings.push({
+      kind: 'html-notice', line,
+      text: value.kind === 'sanitized'
+        ? `Line ${line}: ${sink} receives HTML sanitized by ${value.via}; keep the sanitizer on every path that reaches it.`
+        : `Line ${line}: ${sink} renders trusted static content from ${value.via}; it stays safe only while that content never includes user input.`,
+    });
+  };
+
   walk(sf, (node) => {
     if (isBranchNode(node)) out.branches++;
     if (ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node) || ts.isStringLiteral(node)) {
@@ -374,23 +395,22 @@ export function scanAst(path: string, content: string): AstScan {
         ? object.properties.find((p) => (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) && p.name.getText(sf) === '__html')
         : undefined;
       const value = html && ts.isPropertyAssignment(html) ? classifyHtml(html.initializer, sf) : html ? classifyHtml((html as ts.ShorthandPropertyAssignment).name, sf) : { kind: 'unsafe' as const, via: (init?.getText(sf) ?? 'unknown value').slice(0, 60) };
-      if (value.kind === 'unsafe') {
-        out.findings.push({ kind: 'unsafe-html', line, text: `Line ${line}: dangerouslySetInnerHTML renders \`${value.via}\`, which is not sanitized; unsanitized input here is an XSS risk.` });
-      } else {
-        out.findings.push({
-          kind: 'html-notice', line,
-          text: value.kind === 'sanitized'
-            ? `Line ${line}: dangerouslySetInnerHTML receives HTML sanitized by ${value.via}; keep the sanitizer on every path that reaches it.`
-            : `Line ${line}: dangerouslySetInnerHTML renders trusted static content from ${value.via}; it stays safe only while that content never includes user input.`,
-        });
-      }
+      reportHtml(line, 'dangerouslySetInnerHTML', value);
+    } else if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isPropertyAccessExpression(node.left) && /^(?:inner|outer)HTML$/.test(node.left.name.text)) {
+      reportHtml(startLine(sf, node), node.left.name.text, classifyHtml(node.right, sf));
+    } else if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const method = node.expression.name.text;
+      // document.write joins every argument into the HTML; insertAdjacentHTML only parses the second.
+      const args = method === 'insertAdjacentHTML' ? node.arguments.slice(1, 2) : /^write(?:ln)?$/.test(method) && node.expression.expression.getText(sf) === 'document' ? [...node.arguments] : [];
+      const parts = args.map((arg) => classifyHtml(arg, sf));
+      if (parts.length) reportHtml(startLine(sf, node), `${method}()`, parts.find((p) => p.kind === 'unsafe') ?? parts.find((p) => p.kind === 'sanitized') ?? parts[0]);
     }
   });
 
   const total = out.views.lines.length;
   if (total > MONOLITH_LINES) {
-    const { count, plan } = monolithAdvice(sf);
-    out.findings.push({ kind: 'monolith', line: 1, text: `Line 1: ${total} lines and ${count} top-level declarations in one file, so many unrelated changes land here. Possible split by prefix/domain (heuristic): ${plan}`, suggestion: `Consider splitting this ${total}-line file by domain (heuristic): ${plan}` });
+    const { count, plan } = monolithAdvice(sf, total, out.longestFunction);
+    out.findings.push({ kind: 'monolith', line: 1, text: `Line 1: ${total} lines and ${count} top-level declarations in one file, so many unrelated changes land here. Possible split (heuristic): ${plan}`, suggestion: `Consider splitting this ${total}-line file (heuristic): ${plan}` });
   }
   out.nestingHint = nestingAdvice(sf);
   return out;

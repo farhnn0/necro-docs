@@ -415,7 +415,7 @@ describe('static scanner fairness', () => {
     expect(parse).toContain('Line 3: catch is the first stage of a multi-stage fallback');
 
     const post = nodes['src/Post.tsx'].findings.map((f) => f.text).join('\n');
-    expect(post).toContain('Line 2: dangerouslySetInnerHTML renders `p.html`, which is not sanitized');
+    expect(post).toContain('Line 2: dangerouslySetInnerHTML receives `p.html`, which does not pass through a recognized sanitizer');
     expect(post).toContain('Line 1: dangerouslySetInnerHTML receives HTML sanitized by safeSanitize()');
   });
 
