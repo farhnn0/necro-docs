@@ -1,23 +1,23 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { getInstallationRepositories } from '@/lib/auth/github-app';
+import { getInstallationRepositories, INSTALLATIONS_COOKIE, openInstallations } from '@/lib/auth/github-app';
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
-  const searchParams = request.nextUrl.searchParams;
-  const installationId =
-    searchParams.get('installation_id') ||
-    request.cookies.get('gh_installation_id')?.value;
-
-  if (!installationId) {
+  const installations = openInstallations(request.cookies.get(INSTALLATIONS_COOKIE)?.value);
+  if (installations.length === 0) {
     return NextResponse.json(
-      { error: 'MISSING_INSTALLATION_ID', message: 'No GitHub App installation ID provided.' },
-      { status: 400 }
+      { error: 'NOT_CONNECTED', message: 'Connect GitHub to list your repositories.' },
+      { status: 401 }
     );
   }
 
   try {
-    const result = await getInstallationRepositories(installationId);
-    return NextResponse.json(result);
+    const results = await Promise.all(installations.map((installation) => getInstallationRepositories(installation.id)));
+    return NextResponse.json({
+      repositories: results.flatMap((result) => result.repositories),
+      totalCount: results.reduce((total, result) => total + result.totalCount, 0),
+      installationId: String(installations[0].id),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json(

@@ -67,28 +67,29 @@ export default function Home() {
   const [analysis, setAnalysis] = useState<AnalysisState>({ status: 'idle' });
   const analysisController = useRef<AbortController | null>(null);
 
-  const [installationId, setInstallationId] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return null;
-    return (
-      new URLSearchParams(window.location.search).get('installation_id') ||
-      window.sessionStorage.getItem('gh_installation_id')
-    );
-  });
+  const [installationId, setInstallationId] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [githubRepos, setGithubRepos] = useState<GitHubRepoSummary[]>([]);
   const [loadingRepos, setLoadingRepos] = useState(false);
   const [reposError, setReposError] = useState<string | null>(null);
   const repoInputRef = useRef<HTMLInputElement>(null);
 
-  const fetchGithubRepos = useCallback(async (instId: string) => {
+  const fetchGithubRepos = useCallback(async () => {
     setLoadingRepos(true);
     setReposError(null);
     try {
-      const res = await fetch(`/api/auth/github/repos?installation_id=${encodeURIComponent(instId)}`);
+      // The server reads the signed sign-in cookie; 401 means the user has not connected GitHub.
+      const res = await fetch('/api/auth/github/repos');
       const data = await res.json();
+      if (res.status === 401) {
+        setInstallationId(null);
+        setGithubRepos([]);
+        return;
+      }
       if (!res.ok) {
         throw new Error(data.message || 'Failed to fetch repositories');
       }
+      setInstallationId(data.installationId ?? null);
       setGithubRepos(data.repositories || []);
     } catch (err) {
       setReposError(err instanceof Error ? err.message : 'Failed to load repositories');
@@ -98,16 +99,14 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!installationId) return;
-    window.sessionStorage.setItem('gh_installation_id', installationId);
-    void fetchGithubRepos(installationId);
-
+    void fetchGithubRepos();
     const params = new URLSearchParams(window.location.search);
-    if (params.get('github_installed')) {
+    if (params.get('github_installed') || params.get('github_error')) {
       setPickerOpen(true);
       window.history.replaceState({}, '', window.location.pathname);
     }
-  }, [fetchGithubRepos, installationId]);
+    if (params.get('github_error')) setReposError('GitHub sign-in failed. Try connecting again.');
+  }, [fetchGithubRepos]);
 
   useEffect(() => () => analysisController.current?.abort(), []);
 
@@ -156,13 +155,9 @@ export default function Home() {
     const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (installationId) {
-        headers['x-github-installation-id'] = installationId;
-      }
       const response = await fetch('/api/ingest', {
         method: 'POST',
-        headers,
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ repoUrl: value }),
         signal: controller.signal,
       });
@@ -186,7 +181,7 @@ export default function Home() {
       window.clearInterval(ticker);
       window.clearTimeout(timeout);
     }
-  }, [analysis.status, installationId]);
+  }, [analysis.status]);
 
   function handleCustomRepo(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -198,7 +193,7 @@ export default function Home() {
     if (installationId) {
       setPickerOpen(true);
       if (githubRepos.length === 0) {
-        void fetchGithubRepos(installationId);
+        void fetchGithubRepos();
       }
     } else {
       window.location.href = '/api/auth/github/install';
@@ -286,7 +281,7 @@ export default function Home() {
         error={reposError}
         installationId={installationId}
         onSelectRepo={handleSelectGithubRepo}
-        onRefresh={() => installationId && void fetchGithubRepos(installationId)}
+        onRefresh={() => void fetchGithubRepos()}
       />
     </main>
   );

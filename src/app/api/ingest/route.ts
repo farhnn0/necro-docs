@@ -49,27 +49,15 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { INGEST_CONFIG } from '@/lib/constants';
 import { IngestError, toErrorResponse } from '@/lib/ingest/errors';
-import { analyzeRepository } from '@/lib/repoAnalyzer';
+import { analyzeRepository, parseGitHubUrl } from '@/lib/repoAnalyzer';
 import type { RepoAnalysis } from '@/lib/repoAnalyzer';
-import { getInstallationToken } from '@/lib/auth/github-app';
+import { getInstallationToken, INSTALLATIONS_COOKIE, openInstallations } from '@/lib/auth/github-app';
 
 export const maxDuration = 60; // seconds; matches INGEST_CONFIG.TIMEOUT_MS
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const startedAt = performance.now();
   let token = request.headers.get('x-github-token')?.trim() || process.env.GITHUB_TOKEN?.trim() || undefined;
-  const installationId =
-    request.headers.get('x-github-installation-id')?.trim() ||
-    request.cookies.get('gh_installation_id')?.value;
-
-  if (!token && installationId) {
-    try {
-      const auth = await getInstallationToken(installationId);
-      token = auth.token;
-    } catch {
-      // If installation token creation fails, proceed with default unauthenticated/fallback
-    }
-  }
   try {
     const text = await request.text();
     if (text.length > INGEST_CONFIG.MAX_BODY_CHARS) {
@@ -87,6 +75,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const { repoUrl } = body as { repoUrl?: unknown };
     if (repoUrl === undefined || repoUrl === null) {
       throw new IngestError('MISSING_REPOSITORY_URL', 'repoUrl is required');
+    }
+    if (!token) {
+      // Only an installation verified at sign-in, on the account that owns the repository, may be used.
+      const { owner } = parseGitHubUrl(repoUrl);
+      const installation = openInstallations(request.cookies.get(INSTALLATIONS_COOKIE)?.value)
+        .find((candidate) => candidate.account.toLowerCase() === owner.toLowerCase());
+      // Without an installation token the repository is read anonymously, which works for public ones.
+      if (installation) token = await getInstallationToken(installation.id).then((auth) => auth.token, () => undefined);
     }
 
     const analysis: RepoAnalysis = await analyzeRepository(repoUrl as string, {
