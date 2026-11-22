@@ -167,9 +167,10 @@ describe('scanner accuracy fixtures', () => {
       '// TODO: replace temporary cache',
       '/* UNSAFE: bypasses auth check for local dev */',
       'export const a = 1; // HACK(team): retry on 503',
+      '/* legacy API */ // TODO replace this',
     );
     const [debt] = scanSource('src/markers.ts', code);
     expect(debt?.kind).toBe('debt');
-    expect(debt?.text).toContain('3 places: lines 1, 2, 3');
+    expect(debt?.text).toContain('4 places: lines 1, 2, 3, 4');
   });
 });

@@ -24,7 +24,7 @@ import { IngestError } from '@/lib/ingest/errors';
 import { mapGitHubError } from '@/lib/ingest/github';
 import { detectRelations, resolveImport } from '@/lib/ingest/relations';
 import { layoutGraph } from '@/lib/graphLayout';
-import { scanAst, type AstScan } from '@/lib/astScan';
+import { matchDebtComment, scanAst, type AstScan } from '@/lib/astScan';
 import type { FindingKind, RepoFinding } from '@/lib/types';
 
 // ============================================================================
@@ -553,8 +553,6 @@ const BRANCH_RE: Record<Lang, RegExp> = {
   py: /\b(?:if|elif|for|while|except|and|or)\b/g,
 };
 
-/** Actionable debt markers: at the start of a comment (or JSDoc `*` line), or followed by `:` anywhere. */
-const DEBT_RE = /^\s*\*?\s*(?:(TODO|FIXME|HACK|XXX)(?:\s*\([^)]*\))?(?:[:\-\s]|$)|(UNSAFE)(?:\s*\([^)]*\))?[:\-])|\b(TODO|FIXME|HACK|XXX|UNSAFE)(?:\s*\([^)]*\))?:/;
 const KEYWORDS_NOT_METHODS = new Set(['if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'else', 'with']);
 
 /** A catch body that only returns a placeholder value (`return null`, `return []`, `return None`, ...). */
@@ -813,14 +811,16 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
   if (weak) silent += ROT.WEAK_TYPING;
 
   // Technical-debt comments (+8 each). mergeByKind folds them into one finding with every line.
-  comment.forEach((text, i) => {
-    const m = DEBT_RE.exec(text);
-    if (!m) return;
+  const debtHits = ast
+    ? ast.debtComments
+    : comment.flatMap((text, i) => {
+        const hit = matchDebtComment(text);
+        return hit ? [{ line: i + 1, ...hit }] : [];
+      });
+  for (const { line, tag, note } of debtHits) {
     silent += ROT.DEBT_COMMENT;
-    const tag = (m[1] ?? m[2] ?? m[3]).toUpperCase();
-    const note = text.trim().replace(/\s+/g, ' ').slice(0, 70);
-    issues.push(issue('debt', i + 1, `Line ${i + 1}: ${tag} comment marks unresolved technical debt: "${note}".`));
-  });
+    issues.push(issue('debt', line, `Line ${line}: ${tag} comment marks unresolved technical debt: "${note}".`));
+  }
 
   const longest = ast ? ast.longestFunction : longestFunction(lang, bare, bareText, offsets, lineAt);
   const long = longest && longest.length >= LONG_FUNCTION_LINES ? longest : null;

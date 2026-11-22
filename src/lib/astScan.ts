@@ -37,6 +37,8 @@ export interface AstScan {
   anyLines: number[];
   /** 1-based line of every `@ts-ignore` / `@ts-nocheck` directive: a comment whose last line starts with it, as TypeScript reads it. */
   suppressionLines: number[];
+  /** Actionable technical-debt markers detected per individual comment range (so a second same-line comment is not masked by an earlier one). */
+  debtComments: Array<{ line: number; tag: string; note: string }>;
   /** The function with the most lines (declaration to closing brace). */
   longestFunction: { name: string; line: number; length: number } | null;
   /** Exact control-flow decision points (if/loop/case/catch/ternary/&&/||), ignoring property names and types. */
@@ -247,7 +249,18 @@ const splitLines = (text: string): string[] => {
  * Builds the line views from real tokens, so a quote inside a regex literal or JSX text can never be
  * mistaken for the start of a string. Every view keeps the original columns: removed text becomes spaces.
  */
-function lineViews(sf: ts.SourceFile, suppressionLines: number[]): LineViews {
+/** Actionable debt markers: at the start of a comment (or JSDoc `*` line), or followed by `:` anywhere. */
+const DEBT_RE = /^\s*\*?\s*(?:(TODO|FIXME|HACK|XXX)(?:\s*\([^)]*\))?(?:[:\-\s]|$)|(UNSAFE)(?:\s*\([^)]*\))?[:\-])|\b(TODO|FIXME|HACK|XXX|UNSAFE)(?:\s*\([^)]*\))?:/;
+
+export function matchDebtComment(text: string): { tag: string; note: string } | null {
+  const m = DEBT_RE.exec(text);
+  if (!m) return null;
+  const tag = (m[1] ?? m[2] ?? m[3]).toUpperCase();
+  const note = text.trim().replace(/\s+/g, ' ').slice(0, 70);
+  return { tag, note };
+}
+
+function lineViews(sf: ts.SourceFile, suppressionLines: number[], debtComments: AstScan['debtComments']): LineViews {
   const text = sf.text;
   // UTF-16 units, not code points: every position below is a string index, and an emoji is two of them.
   const code = text.split('');
@@ -257,6 +270,7 @@ function lineViews(sf: ts.SourceFile, suppressionLines: number[]): LineViews {
     for (let i = from; i < to; i++) if (target[i] !== '\n' && target[i] !== '\r') target[i] = ' ';
   };
   const seen = new Set<number>();
+  const seenDebtLines = new Set<number>();
   const visit = (node: ts.Node) => {
     const start = node.getStart(sf);
     if (node.kind === ts.SyntaxKind.JsxText) blank(bare, node.pos, node.end);
@@ -270,6 +284,16 @@ function lineViews(sf: ts.SourceFile, suppressionLines: number[]): LineViews {
         blank(bare, pos, end);
         const innerEnd = kind === ts.SyntaxKind.MultiLineCommentTrivia ? end - 2 : end;
         for (let i = pos + 2; i < innerEnd; i++) comment[i] = text[i];
+        const startLineNum = sf.getLineAndCharacterOfPosition(pos).line + 1;
+        text.slice(pos + 2, innerEnd).split(/\r?\n/).forEach((part, offset) => {
+          const line = startLineNum + offset;
+          if (seenDebtLines.has(line)) return;
+          const hit = matchDebtComment(part);
+          if (hit) {
+            seenDebtLines.add(line);
+            debtComments.push({ line, ...hit });
+          }
+        });
         if (/^[\s/*]*@ts-(?:ignore|nocheck)\b/.test(text.slice(pos, end).split('\n').pop() ?? '')) {
           suppressionLines.push(sf.getLineAndCharacterOfPosition(end - 1).line + 1);
         }
@@ -311,7 +335,8 @@ function isBranchNode(node: ts.Node): boolean {
 export function scanAst(path: string, content: string): AstScan {
   const sf = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true, kindFor(path));
   const suppressionLines: number[] = [];
-  const out: AstScan = { findings: [], stringLines: new Set(), fallbackCatchLines: new Set(), declaredTypes: [], promptTypeRefs: [], nestingHint: null, views: lineViews(sf, suppressionLines), anyLines: [], suppressionLines, longestFunction: null, branches: 0 };
+  const debtComments: AstScan['debtComments'] = [];
+  const out: AstScan = { findings: [], stringLines: new Set(), fallbackCatchLines: new Set(), declaredTypes: [], promptTypeRefs: [], nestingHint: null, views: lineViews(sf, suppressionLines, debtComments), anyLines: [], suppressionLines, debtComments, longestFunction: null, branches: 0 };
 
   const literal = (node: ts.Node, text: string) => {
     const first = startLine(sf, node);
