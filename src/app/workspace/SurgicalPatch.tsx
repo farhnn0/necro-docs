@@ -174,7 +174,8 @@ export function SurgicalPatch({
         remaining: Array.isArray(data.remaining) ? data.remaining : [],
       };
       setState({ status: 'ready', ...patch });
-      onSynthesized?.(patch);
+      // An unchanged file is not a patch: caching it would mark the node PATCH READY.
+      if (patch.patchedCode !== code) onSynthesized?.(patch);
     } catch {
       setState({ status: 'error', message: 'The server could not be reached.' });
     }
@@ -195,7 +196,7 @@ export function SurgicalPatch({
         <div className="flex items-center gap-1.5 min-w-0">
           <Sparkles size={14} className="text-ink shrink-0" />
           <h3 id="surgical-patch-title" className="font-display text-[13px] font-semibold text-ink truncate">Surgical patch</h3>
-          {state.status === 'ready' && (
+          {state.status === 'ready' && hunks.length > 0 && (
             <span className="shrink-0 rounded-full bg-emerald px-2 py-0.5 font-mono text-[9px] font-bold text-white shadow-2xs">
               SYNTHESIZED
             </span>
@@ -206,7 +207,7 @@ export function SurgicalPatch({
         )}
       </div>
       <p className="mt-1 text-[11px] leading-normal text-muted">
-        {state.status === 'ready'
+        {state.status === 'ready' && hunks.length > 0
           ? 'Synthesized AI patch is loaded and ready. Stored in session cache (0 extra tokens).'
           : nothingFixable
             ? 'Nothing here can be fixed by a local edit. Size, nesting, duplication and debt findings need a planned refactor, so no automatic patch is offered.'
