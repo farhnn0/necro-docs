@@ -35,6 +35,8 @@ export interface AstScan {
   views: LineViews;
   /** 1-based line of every `any` type keyword. */
   anyLines: number[];
+  /** 1-based line of every `@ts-ignore` / `@ts-nocheck` directive: a comment whose last line starts with it, as TypeScript reads it. */
+  suppressionLines: number[];
   /** The function with the most lines (declaration to closing brace). */
   longestFunction: { name: string; line: number; length: number } | null;
 }
@@ -243,7 +245,7 @@ const splitLines = (text: string): string[] => {
  * Builds the line views from real tokens, so a quote inside a regex literal or JSX text can never be
  * mistaken for the start of a string. Every view keeps the original columns: removed text becomes spaces.
  */
-function lineViews(sf: ts.SourceFile): LineViews {
+function lineViews(sf: ts.SourceFile, suppressionLines: number[]): LineViews {
   const text = sf.text;
   // UTF-16 units, not code points: every position below is a string index, and an emoji is two of them.
   const code = text.split('');
@@ -266,6 +268,9 @@ function lineViews(sf: ts.SourceFile): LineViews {
         blank(bare, pos, end);
         const innerEnd = kind === ts.SyntaxKind.MultiLineCommentTrivia ? end - 2 : end;
         for (let i = pos + 2; i < innerEnd; i++) comment[i] = text[i];
+        if (/^[\s/*]*@ts-(?:ignore|nocheck)\b/.test(text.slice(pos, end).split('\n').pop() ?? '')) {
+          suppressionLines.push(sf.getLineAndCharacterOfPosition(end - 1).line + 1);
+        }
       };
       ts.forEachTrailingCommentRange(text, node.getFullStart(), collect);
       ts.forEachLeadingCommentRange(text, node.getFullStart(), collect);
@@ -283,7 +288,8 @@ const startLine = (sf: ts.SourceFile, node: ts.Node) => sf.getLineAndCharacterOf
 
 export function scanAst(path: string, content: string): AstScan {
   const sf = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true, kindFor(path));
-  const out: AstScan = { findings: [], stringLines: new Set(), fallbackCatchLines: new Set(), declaredTypes: [], promptTypeRefs: [], nestingHint: null, views: lineViews(sf), anyLines: [], longestFunction: null };
+  const suppressionLines: number[] = [];
+  const out: AstScan = { findings: [], stringLines: new Set(), fallbackCatchLines: new Set(), declaredTypes: [], promptTypeRefs: [], nestingHint: null, views: lineViews(sf, suppressionLines), anyLines: [], suppressionLines, longestFunction: null };
 
   const literal = (node: ts.Node, text: string) => {
     const first = startLine(sf, node);

@@ -58,6 +58,12 @@ const SAMPLES: Array<{ name: string; path: string; code: string; expected: Array
     expected: [],
   },
   {
+    name: 'a @ts-ignore directive after another comment on the same line still counts',
+    path: 'src/legacy.ts',
+    code: src('/* legacy API */ // @ts-ignore', 'export const port: number = process.env.PORT;'),
+    expected: [['ts-ignore', 1]],
+  },
+  {
     name: 'a long constructor counts as a long function',
     path: 'src/store.ts',
     code: src('export class Store {', '  constructor() {', ...big(70), '  }', '}'),

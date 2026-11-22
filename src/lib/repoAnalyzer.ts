@@ -772,7 +772,8 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
   };
   if (lang === 'js') {
     // Only a comment that starts with the directive suppresses checking; prose that mentions it does not.
-    const ignores = firstLine(/^[\s/*]*@ts-(?:ignore|nocheck)\b/, comment);
+    const ignored = ast?.suppressionLines ?? firstLine(/^[\s/*]*@ts-(?:ignore|nocheck)\b/, comment).lines;
+    const ignores = { count: ignored.length, line: ignored[0] ?? 0, lines: ignored };
     if (ignores.count > 0) {
       weak = true;
       issues.push({ ...issue('ts-ignore', ignores.line, `Line ${ignores.line}: @ts-ignore suppresses type checking${ignores.count > 1 ? ` (${ignores.count} places)` : ''}.`), lines: ignores.lines });
