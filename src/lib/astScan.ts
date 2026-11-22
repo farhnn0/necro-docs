@@ -39,6 +39,8 @@ export interface AstScan {
   suppressionLines: number[];
   /** The function with the most lines (declaration to closing brace). */
   longestFunction: { name: string; line: number; length: number } | null;
+  /** Exact control-flow decision points (if/loop/case/catch/ternary/&&/||), ignoring property names and types. */
+  branches: number;
 }
 
 export interface LineViews {
@@ -286,10 +288,28 @@ function lineViews(sf: ts.SourceFile, suppressionLines: number[]): LineViews {
 
 const startLine = (sf: ts.SourceFile, node: ts.Node) => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
 
+function isBranchNode(node: ts.Node): boolean {
+  if (
+    ts.isIfStatement(node) ||
+    ts.isConditionalExpression(node) ||
+    ts.isForStatement(node) ||
+    ts.isForInStatement(node) ||
+    ts.isForOfStatement(node) ||
+    ts.isWhileStatement(node) ||
+    ts.isDoStatement(node) ||
+    ts.isCaseClause(node) ||
+    ts.isCatchClause(node)
+  ) return true;
+  return ts.isBinaryExpression(node) && (
+    node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+    node.operatorToken.kind === ts.SyntaxKind.BarBarToken
+  );
+}
+
 export function scanAst(path: string, content: string): AstScan {
   const sf = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true, kindFor(path));
   const suppressionLines: number[] = [];
-  const out: AstScan = { findings: [], stringLines: new Set(), fallbackCatchLines: new Set(), declaredTypes: [], promptTypeRefs: [], nestingHint: null, views: lineViews(sf, suppressionLines), anyLines: [], suppressionLines, longestFunction: null };
+  const out: AstScan = { findings: [], stringLines: new Set(), fallbackCatchLines: new Set(), declaredTypes: [], promptTypeRefs: [], nestingHint: null, views: lineViews(sf, suppressionLines), anyLines: [], suppressionLines, longestFunction: null, branches: 0 };
 
   const literal = (node: ts.Node, text: string) => {
     const first = startLine(sf, node);
@@ -305,6 +325,7 @@ export function scanAst(path: string, content: string): AstScan {
   }
 
   walk(sf, (node) => {
+    if (isBranchNode(node)) out.branches++;
     if (ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node) || ts.isStringLiteral(node)) {
       literal(node, node.text);
     } else if (node.kind === ts.SyntaxKind.AnyKeyword) {
@@ -339,10 +360,10 @@ export function scanAst(path: string, content: string): AstScan {
     }
   });
 
-  const total = sf.getLineAndCharacterOfPosition(sf.end).line + 1;
+  const total = out.views.lines.length;
   if (total > MONOLITH_LINES) {
     const { count, plan } = monolithAdvice(sf);
-    out.findings.push({ kind: 'monolith', line: 1, text: `Line 1: ${total} lines and ${count} top-level declarations in one file, so many unrelated changes land here. Split by domain: ${plan}`, suggestion: `Split this ${total}-line file by domain: ${plan}` });
+    out.findings.push({ kind: 'monolith', line: 1, text: `Line 1: ${total} lines and ${count} top-level declarations in one file, so many unrelated changes land here. Possible split by prefix/domain (heuristic): ${plan}`, suggestion: `Consider splitting this ${total}-line file by domain (heuristic): ${plan}` });
   }
   out.nestingHint = nestingAdvice(sf);
   return out;
