@@ -113,6 +113,8 @@ describe('POST /api/patch', () => {
     ['an edit whose text is not in the file', [{ old: '  } catch (err) {}', new: FIX.new }], /was not found/],
     ['an ambiguous edit', [{ old: 'export const rate1', new: 'export const price1' }], /more than once|not near/],
     ['an edit far from every finding', [FIX, { old: 'export const rate29 = 29;', new: 'export const rate29 = 30;' }], /not near any listed finding/],
+    ['code riding along on an added import line', [FIX, { old: 'export const rate29 = 29;', new: "import { log } from './log'; log(1);\nexport const rate29 = 29;" }], /not near any listed finding/],
+    ['reordered statements next to an added import', [FIX, { old: 'export const rate28 = 28;\nexport const rate29 = 29;', new: "import { log } from './log';\nexport const rate29 = 29;\nexport const rate28 = 28;" }], /not near any listed finding/],
     ['a rewrite much larger than the finding needs', [{ old: FIX.old, new: `${FIX.new}\n${Array.from({ length: 40 }, (_, i) => `  // step ${i}`).join('\n')}` }], /more than these findings need/],
     ['a patch that breaks the syntax', [{ old: FIX.old, new: '  } catch (error) { throw error;' }], /syntax error/],
   ])('rejects %s and leaves the file unchanged', async (_name, edits, reason) => {

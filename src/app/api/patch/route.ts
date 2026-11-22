@@ -79,14 +79,18 @@ Rules:
 }
 
 // shortcut: single-line imports only; a multi-line `import {…}` or a Go import block still has to be near a finding. Upgrade with the AST if that blocks real fixes.
-const IMPORT_LINE = /^\s*(?:import\s.+|from\s+\S+\s+import\s.+|(?:const|let|var)\s.+=\s*require\(.+\);?)\s*$/;
+// Each form ends at its closing quote or name list, so nothing executable can ride along on the same line.
+const IMPORT_LINE = new RegExp([
+  String.raw`^\s*import\s+(?:type\s+)?(?:[\w{}$*\s,]+\s+from\s+)?(['"])[^'"]+\1;?\s*$`,
+  String.raw`^\s*(?:const|let|var)\s+[\w{}$\s,:]+=\s*require\((['"])[^'"]+\2\);?\s*$`,
+  String.raw`^\s*from\s+[\w.]+\s+import\s+[\w*,\s]+$`,
+  String.raw`^\s*import\s+[\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*\s*$`,
+].join('|'));
 
-/** An edit that only adds or changes import lines: a fix may need one at the top of the file, far from its finding. */
+/** An edit that leaves every non-import line as it was, in the same order: a fix may need an import at the top of the file, far from its finding. */
 function importsOnly(oldText: string, newText: string): boolean {
-  const before = oldText.split(/\r?\n/);
-  const after = newText.split(/\r?\n/);
-  const touched = [...before.filter((line) => !after.includes(line)), ...after.filter((line) => !before.includes(line))];
-  return touched.length > 0 && touched.every((line) => IMPORT_LINE.test(line));
+  const rest = (text: string) => text.split(/\r?\n/).filter((line) => !IMPORT_LINE.test(line)).join('\n');
+  return oldText !== newText && rest(oldText) === rest(newText);
 }
 
 /** Applies search/replace edits to the original text. Returns the reason when an edit is not safe to apply. */
