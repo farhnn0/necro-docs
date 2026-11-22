@@ -85,7 +85,7 @@ function walk(node: ts.Node, visit: (node: ts.Node) => boolean | void): void {
 
 type HtmlKind = 'sanitized' | 'static' | 'unsafe';
 
-/** How an `__html` expression is produced. One hop through a same-file `const` is followed. */
+/** How an `__html` expression is produced. One hop through a same-file `const` is followed when that name is declared only once in the file. */
 function classifyHtml(expression: ts.Node, sf: ts.SourceFile, depth = 0): { kind: HtmlKind; via: string } {
   const node = unwrap(expression);
   if (ts.isStringLiteralLike(node)) return { kind: 'static', via: 'a string literal' };
@@ -113,11 +113,15 @@ function classifyHtml(expression: ts.Node, sf: ts.SourceFile, depth = 0): { kind
     return sides.find((s) => s.kind === 'unsafe') ?? sides[0];
   }
   if (ts.isIdentifier(node) && depth < 2) {
-    let found: ts.Expression | undefined;
+    // shortcut: no scope analysis, so a shadowed or reassignable name stays untrusted; upgrade with a TypeChecker if this misses real consts.
+    const decls: ts.Node[] = [];
     walk(sf, (n) => {
-      if (!found && ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === node.text && n.initializer) found = n.initializer;
+      if ((ts.isVariableDeclaration(n) || ts.isParameter(n) || ts.isBindingElement(n)) && ts.isIdentifier(n.name) && n.name.text === node.text) decls.push(n);
     });
-    if (found) return classifyHtml(found, sf, depth + 1);
+    const only = decls.length === 1 ? decls[0] : undefined;
+    if (only && ts.isVariableDeclaration(only) && only.initializer && ts.isVariableDeclarationList(only.parent) && only.parent.flags & ts.NodeFlags.Const) {
+      return classifyHtml(only.initializer, sf, depth + 1);
+    }
   }
   return { kind: 'unsafe', via: node.getText(sf).slice(0, 60) };
 }
