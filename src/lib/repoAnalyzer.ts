@@ -771,7 +771,8 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
     return { count: hits.length, line: hits[0] ?? 0, lines: hits };
   };
   if (lang === 'js') {
-    const ignores = firstLine(/@ts-(?:ignore|nocheck)\b/, comment);
+    // Only a comment that starts with the directive suppresses checking; prose that mentions it does not.
+    const ignores = firstLine(/^[\s/*]*@ts-(?:ignore|nocheck)\b/, comment);
     if (ignores.count > 0) {
       weak = true;
       issues.push({ ...issue('ts-ignore', ignores.line, `Line ${ignores.line}: @ts-ignore suppresses type checking${ignores.count > 1 ? ` (${ignores.count} places)` : ''}.`), lines: ignores.lines });
@@ -1038,23 +1039,16 @@ function toFindings(f: Scanned): RepoFinding[] {
 }
 
 /**
- * Scanner findings always stay. The model may add an observation only about a line it was shown and that
- * the scanner has not already reported; remarks without a line become notes, anything else is dropped.
+ * Scanner findings always stay. What the model adds becomes a note when it cites no line, or a line it was
+ * shown that the scanner has not already reported; anything else is dropped.
  */
-function mergeAiFindings(node: { findings: RepoFinding[]; notes: string[] }, ai: Partial<Explanation>, shown: ReadonlySet<number>, suggestion: string): { findings: RepoFinding[]; notes: string[] } {
-  const findings = [...node.findings];
-  const remarks: string[] = [];
-  for (const text of ai.findings ?? []) {
-    const cited = /^Lines?\s+(\d+)/i.exec(text);
-    if (!cited) remarks.push(text);
-    else {
-      const line = Number(cited[1]);
-      if (shown.has(line) && !findings.some((finding) => finding.lines.includes(line))) {
-        findings.push({ kind: 'ai', line, lines: [line], text, suggestion, source: 'ai' });
-      }
-    }
-  }
-  return { findings, notes: [...remarks, ...node.notes].slice(0, 3) };
+function mergeAiFindings(node: { findings: RepoFinding[]; notes: string[] }, ai: Partial<Explanation>, shown: ReadonlySet<number>): { findings: RepoFinding[]; notes: string[] } {
+  // What the model adds cannot be verified, so it is shown as a note and never counted as a finding.
+  const remarks = (ai.findings ?? []).filter((text) => {
+    const line = Number(/^Lines?\s+(\d+)/i.exec(text)?.[1] ?? 0);
+    return line === 0 || (shown.has(line) && !node.findings.some((finding) => finding.lines.includes(line)));
+  }).map((text) => `AI (unverified): ${text}`);
+  return { findings: node.findings, notes: [...remarks, ...node.notes].slice(0, 3) };
 }
 
 /** Path-based role hints. First match wins, so specific folders come before generic ones. */
@@ -1595,7 +1589,7 @@ export async function analyzeRepository(repoUrl: string, options: AnalyzeOptions
     const base = { ...node, featured: featured.has(node.path) };
     if (!ai) return { ...base, explainedBy: 'static' };
     const recommendation = ai.recommendation ?? node.recommendation;
-    return { ...base, explainedBy: 'ai', summary: ai.summary ?? node.summary, recommendation, ...mergeAiFindings(node, ai, shownLines.get(node.path) ?? new Set(), recommendation) };
+    return { ...base, explainedBy: 'ai', summary: ai.summary ?? node.summary, recommendation, ...mergeAiFindings(node, ai, shownLines.get(node.path) ?? new Set()) };
   }).sort((a, b) => (a.path < b.path ? -1 : 1));
 
   const weight = nodes.reduce((sum, n) => sum + Math.max(n.loc, 1), 0);

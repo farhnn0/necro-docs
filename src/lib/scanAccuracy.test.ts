@@ -52,6 +52,12 @@ const SAMPLES: Array<{ name: string; path: string; code: string; expected: Array
     expected: [['long-function', 1]],
   },
   {
+    name: 'a comment that only mentions @ts-ignore is not a suppression',
+    path: 'src/doc.ts',
+    code: src('// Weak typing: any, @ts-ignore, eval.', 'export const weak = 1;'),
+    expected: [],
+  },
+  {
     name: 'a long constructor counts as a long function',
     path: 'src/store.ts',
     code: src('export class Store {', '  constructor() {', ...big(70), '  }', '}'),

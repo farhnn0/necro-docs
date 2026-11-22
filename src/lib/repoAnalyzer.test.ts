@@ -259,10 +259,10 @@ describe('analyzeRepository', () => {
     expect(result.edges).toEqual([{ from: 'src/page.ts', to: 'packages/lib/db.ts' }]);
   });
 
-  it('keeps scanner findings and only adds AI findings about lines the model was shown', async () => {
+  it('keeps scanner findings and shows what the AI adds as unverified notes', async () => {
     const reply = JSON.stringify({ files: [{ id: 0, path: 'src/billing/charge.ts', summary: 'Charges the customer.', recommendation: 'Rethrow from the catch.', findings: [
-      'Line 6: The catch hides failed inserts.', // same line as the scanner finding: not a second finding
-      'Line 5: The insert is not awaited inside a transaction.', // shown line the scanner did not report: kept, marked as AI
+      'Line 6: The catch hides failed inserts.', // same line as the scanner finding: dropped
+      'Line 5: The insert is not awaited inside a transaction.', // shown line the scanner did not report: a note
       'Line 412: SQL injection in the query builder.', // the file has 10 lines: dropped
       'The module has no input validation.', // no line: a note, not a finding
     ] }] });
@@ -272,8 +272,8 @@ describe('analyzeRepository', () => {
       const result = await analyzeRepository('Acme/Shop', { token: '', fetchImpl: fakeGitHub(SHOP).impl });
       const charge = result.nodes.find((n) => n.path === 'src/billing/charge.ts')!;
       expect(charge.explainedBy).toBe('ai');
-      expect(charge.findings.map((f) => [f.kind, f.line, f.source])).toEqual([['empty-catch', 6, 'static'], ['debt', 8, 'static'], ['ai', 5, 'ai']]);
-      expect(charge.notes[0]).toBe('The module has no input validation.');
+      expect(charge.findings.map((f) => [f.kind, f.line, f.source])).toEqual([['empty-catch', 6, 'static'], ['debt', 8, 'static']]);
+      expect(charge.notes.slice(0, 2)).toEqual(['AI (unverified): Line 5: The insert is not awaited inside a transaction.', 'AI (unverified): The module has no input validation.']);
       expect(JSON.stringify(charge)).not.toContain('SQL injection');
     } finally {
       vi.unstubAllGlobals();
