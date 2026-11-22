@@ -71,6 +71,19 @@ describe('POST /api/patch', () => {
     expect(data.remaining).toEqual(['Line 7: Empty catch block swallows exceptions silently.']);
   });
 
+  it('accepts an import added at the top for a fix deep in the file', async () => {
+    const code = ["import { db } from './db';", ...Array.from({ length: 40 }, (_, i) => `export const rate${i} = ${i};`), 'export async function charge(amount: number) {', '  try {', '    await db.insert(amount);', '  } catch (error) {}', '  return amount;', '}', ''].join('\n');
+    stubModel({ summary: 'Logs and rethrows.', edits: [
+      { old: "import { db } from './db';", new: "import { db } from './db';\nimport { logger } from './logger';" },
+      { old: '  } catch (error) {}', new: "  } catch (error) {\n    logger.error('charge failed', error);\n    throw error;\n  }" },
+    ] });
+    const { data } = await patch({ path: 'src/charge.ts', code });
+
+    expect(data.provider).toBe('ai');
+    expect(data.patchedCode).toContain("import { logger } from './logger';");
+    expect(data.fixed).toEqual(['Line 45: Empty catch block swallows exceptions silently.']);
+  });
+
   it('never calls the model for a file whose findings are only structural', async () => {
     const prompts = stubModel({ summary: 'x', edits: [] });
     const code = ['// TODO split this module', 'export const a = 1;', ''].join('\n');

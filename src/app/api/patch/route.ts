@@ -78,6 +78,17 @@ Rules:
 - If a finding cannot be fixed safely from what you can see, leave it out and say so in the summary. An empty "edits" list is a valid answer.`;
 }
 
+// shortcut: single-line imports only; a multi-line `import {…}` or a Go import block still has to be near a finding. Upgrade with the AST if that blocks real fixes.
+const IMPORT_LINE = /^\s*(?:import\s.+|from\s+\S+\s+import\s.+|(?:const|let|var)\s.+=\s*require\(.+\);?)\s*$/;
+
+/** An edit that only adds or changes import lines: a fix may need one at the top of the file, far from its finding. */
+function importsOnly(oldText: string, newText: string): boolean {
+  const before = oldText.split(/\r?\n/);
+  const after = newText.split(/\r?\n/);
+  const touched = [...before.filter((line) => !after.includes(line)), ...after.filter((line) => !before.includes(line))];
+  return touched.length > 0 && touched.every((line) => IMPORT_LINE.test(line));
+}
+
 /** Applies search/replace edits to the original text. Returns the reason when an edit is not safe to apply. */
 function applyEdits(code: string, edits: Edit[], targetLines: number[]): { patched: string } | { reason: string } {
   const eol = code.includes('\r\n') ? '\r\n' : '\n';
@@ -90,7 +101,7 @@ function applyEdits(code: string, edits: Edit[], targetLines: number[]): { patch
     if (code.indexOf(old, start + 1) !== -1) return { reason: `edit ${i + 1}: "old" occurs more than once; include a neighbouring line to make it unique.` };
     const first = lineCount(code.slice(0, start));
     const last = first + lineCount(old) - 1;
-    if (!targetLines.some((line) => line >= first - EDIT_REACH_LINES && line <= last + EDIT_REACH_LINES)) {
+    if (!importsOnly(old, edit.new) && !targetLines.some((line) => line >= first - EDIT_REACH_LINES && line <= last + EDIT_REACH_LINES)) {
       return { reason: `edit ${i + 1} changes lines ${first}-${last}, which are not near any listed finding; fix only the listed findings.` };
     }
     changed += Math.max(lineCount(old), lineCount(edit.new));
