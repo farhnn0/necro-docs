@@ -111,11 +111,66 @@ const SAMPLES: Array<{ name: string; path: string; code: string; expected: Array
     code: src('def run():', '    try:', '        work()', '    except Exception:', '        pass'),
     expected: [['empty-catch', 4]],
   },
+  {
+    name: 'explanatory prose mentioning TODO or unsafe is not technical debt',
+    path: 'src/docs.ts',
+    code: src(
+      '/** Kinds a "fix" could create while hiding the problem (a comment, a TODO). */',
+      '// judged by the AST pass (sanitizer / static dictionary / unsafe); fallback only.',
+      '// This parser reports TODO and FIXME comments.',
+      'export const ok = true;',
+    ),
+    expected: [],
+  },
+  {
+    name: 'actionable TODO, FIXME, HACK and UNSAFE markers are reported as debt',
+    path: 'src/markers.ts',
+    code: src(
+      '// TODO: replace temporary cache',
+      '/* UNSAFE: bypasses auth check for local dev */',
+      'export const a = 1; // HACK(team): retry on 503',
+    ),
+    expected: [['debt', 1]],
+  },
+  {
+    name: '.mjs and .cjs modules are scanned like JavaScript',
+    path: 'scripts/sync.mjs',
+    code: src('export function sync(fn) {', '  try { fn(); } catch (e) {}', '}'),
+    expected: [['empty-catch', 2]],
+  },
+  {
+    name: 'small route handler with guard clauses is not flagged for high branching density',
+    path: 'src/api/route.ts',
+    code: src(
+      'export function handle(req: { a?: string; b?: string; c?: string; d?: string }) {',
+      '  if (!req.a) return 400;',
+      '  if (!req.b) return 400;',
+      '  if (!req.c) return 400;',
+      '  if (!req.d) return 400;',
+      '  if (req.a === "x" || req.b === "y") return 403;',
+      '  if (req.c === "z" && req.d === "w") return 409;',
+      '  return req.a && req.b ? 200 : 204;',
+      '}',
+    ),
+    expected: [],
+  },
 ];
 
 describe('scanner accuracy fixtures', () => {
   it.each(SAMPLES)('$name', ({ path, code, expected }) => {
     const found = scanSource(path, code).map((finding) => [finding.kind, finding.line]);
     expect(found).toEqual(expected);
+  });
+
+  it('captures every actionable debt marker line when folded into one finding', () => {
+    const code = src(
+      '// TODO: replace temporary cache',
+      '/* UNSAFE: bypasses auth check for local dev */',
+      'export const a = 1; // HACK(team): retry on 503',
+      '/* legacy API */ // TODO replace this',
+    );
+    const [debt] = scanSource('src/markers.ts', code);
+    expect(debt?.kind).toBe('debt');
+    expect(debt?.text).toContain('4 places: lines 1, 2, 3, 4');
   });
 });

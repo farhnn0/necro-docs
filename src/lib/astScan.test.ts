@@ -138,9 +138,25 @@ describe('4. actionable suggestions', () => {
     const body = fns.map((name) => `export async function ${name}(id: string) {\n  return id;\n}\n${'// filler\n'.repeat(190)}`).join('\n');
     const finding = scanAst('actions.ts', body).findings.find((f) => f.kind === 'monolith')!;
     expect(finding.text).toMatch(/^Line 1: \d+ lines and 8 top-level declarations/);
+    expect(finding.text).toContain('heuristic');
     expect(finding.suggestion).toContain('order.ts (createOrder, updateOrder, deleteOrder, +1 more)');
     expect(finding.suggestion).toContain('user.ts (createUser, updateUser, listUser)');
     expect(finding.suggestion).toContain('barrel');
     expect(scanAst('small.ts', 'export const a = 1;\n').findings).toEqual([]);
+  });
+
+  it('counts exact AST branches and ignores optional types and keyword-named properties', () => {
+    const scan = scanAst('types.ts', src(
+      'export interface Opts { a?: string; b?: number; if?: boolean; case?: string }',
+      'export function run(o: Opts) {',
+      '  let x = o.if && o.case ? 1 : 0;',
+      '  x ||= 2;',
+      '  x &&= 3;',
+      '  if (x) return o.a ?? "ok";',
+      '  return "";',
+      '}',
+    ));
+    // && (1) + ternary (1) + ||= (1) + &&= (1) + if (1) = 5; optional `?`, `o.if`, `o.case`, and `??` are not branches.
+    expect(scan.branches).toBe(5);
   });
 });

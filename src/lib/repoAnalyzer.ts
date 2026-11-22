@@ -24,7 +24,7 @@ import { IngestError } from '@/lib/ingest/errors';
 import { mapGitHubError } from '@/lib/ingest/github';
 import { detectRelations, resolveImport } from '@/lib/ingest/relations';
 import { layoutGraph } from '@/lib/graphLayout';
-import { scanAst, type AstScan } from '@/lib/astScan';
+import { matchDebtComment, scanAst, type AstScan } from '@/lib/astScan';
 import type { FindingKind, RepoFinding } from '@/lib/types';
 
 // ============================================================================
@@ -116,12 +116,14 @@ const LONG_FUNCTION_LINES = 60;
 /** Control-flow depth (if/loop/try inside each other) at which nesting is reported. */
 const DEEP_NESTING = 4;
 /** Decision points per code line at which branching is called high (same cut as the summary text). */
-const HIGH_BRANCH_DENSITY = 0.18;
+const HIGH_BRANCH_DENSITY = 0.30;
+const HIGH_BRANCH_MIN_LOC = 60;
+const HIGH_BRANCH_MIN_COUNT = 25;
 /** Consecutive normalized lines that must match before a block counts as duplicated. */
 const DUPLICATE_WINDOW = 6;
 const RAW_HOST = 'https://raw.githubusercontent.com';
 
-const EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.py', '.go'] as const;
+const EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go'] as const;
 const EXCLUDED_DIRS = new Set(['node_modules', '.next', 'dist', 'build', 'vendor', '.git', '__pycache__', '__tests__', 'tests', 'test']);
 const PRIORITY_DIRS = new Set(['src', 'app', 'lib', 'server', 'core']);
 
@@ -267,7 +269,7 @@ async function fetchRaw(owner: string, repo: string, branch: string, path: strin
 
 function langOf(path: string): Lang | null {
   const lower = path.toLowerCase();
-  if (/\.(?:ts|tsx|js|jsx)$/.test(lower)) return 'js';
+  if (/\.(?:ts|tsx|js|jsx|mjs|cjs)$/.test(lower)) return 'js';
   if (lower.endsWith('.py')) return 'py';
   if (lower.endsWith('.go')) return 'go';
   return null;
@@ -551,7 +553,6 @@ const BRANCH_RE: Record<Lang, RegExp> = {
   py: /\b(?:if|elif|for|while|except|and|or)\b/g,
 };
 
-const DEBT_RE = /\b(?:TODO|FIXME|HACK|XXX)\b|\b[Uu]nsafe\b/;
 const KEYWORDS_NOT_METHODS = new Set(['if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'else', 'with']);
 
 /** A catch body that only returns a placeholder value (`return null`, `return []`, `return None`, ...). */
@@ -580,7 +581,7 @@ function scanCatchBlocks(lang: Lang, bare: string[], bareText: string, comment: 
           : issue('empty-catch', line, `Line ${line}: Empty ${word} block swallows exceptions silently.`),
       );
     } else if (defaultReturn.test(body) && !documented(line, endLine)) {
-      issues.push(issue('default-catch', line, `Line ${line}: ${word} block returns a placeholder value and discards the error, so callers cannot tell a failure from an empty result.`));
+      issues.push(issue('default-catch', line, `Line ${line}: ${word} block returns a placeholder value without logging or a comment; if that fallback is intentional, document why—otherwise callers cannot tell a failure from an empty result.`));
     }
   };
 
@@ -741,7 +742,7 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
   const { lineAt, offsets } = lineIndex(bareText);
   const loc = lines.length;
   const codeLoc = code.filter((l) => l.trim() !== '').length;
-  const branches = (bareText.match(BRANCH_RE[lang]) ?? []).length;
+  const branches = ast ? ast.branches : (bareText.match(BRANCH_RE[lang]) ?? []).length;
   const { depth, line: depthLine } = controlDepth(lang, bare, bareText, lineAt);
   const issues: Issue[] = [];
   let silent = 0;
@@ -810,18 +811,21 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
   if (weak) silent += ROT.WEAK_TYPING;
 
   // Technical-debt comments (+8 each). mergeByKind folds them into one finding with every line.
-  comment.forEach((text, i) => {
-    const m = DEBT_RE.exec(text);
-    if (!m) return;
+  const debtHits = ast
+    ? ast.debtComments
+    : comment.flatMap((text, i) => {
+        const hit = matchDebtComment(text);
+        return hit ? [{ line: i + 1, ...hit }] : [];
+      });
+  for (const { line, tag, note } of debtHits) {
     silent += ROT.DEBT_COMMENT;
-    const note = text.trim().replace(/\s+/g, ' ').slice(0, 70);
-    issues.push(issue('debt', i + 1, `Line ${i + 1}: ${m[0].toUpperCase()} comment marks unresolved technical debt: "${note}".`));
-  });
+    issues.push(issue('debt', line, `Line ${line}: ${tag} comment marks unresolved technical debt: "${note}".`));
+  }
 
   const longest = ast ? ast.longestFunction : longestFunction(lang, bare, bareText, offsets, lineAt);
   const long = longest && longest.length >= LONG_FUNCTION_LINES ? longest : null;
   if (long) {
-    issues.push(issue('long-function', long.line, `Line ${long.line}: ${long.name}() spans ${long.length} lines; split it into smaller functions.`));
+    issues.push(issue('long-function', long.line, `Line ${long.line}: ${long.name}() spans ${long.length} lines; consider splitting independent steps into smaller helpers if it is hard to follow.`));
   }
   if (depth >= DEEP_NESTING) {
     issues.push({
@@ -829,9 +833,9 @@ function scanFile(path: string, content: string, lang: Lang): Scanned {
       ...(ast?.nestingHint ? { suggestion: ast.nestingHint } : {}),
     });
   }
-  // Density, not a raw count: 20 branches spread over 700 lines is not complex.
-  if (branches >= 10 && branches / Math.max(codeLoc, 1) >= HIGH_BRANCH_DENSITY) {
-    issues.push(issue('branching', null, `High branching density: ${branches} decision points across ${codeLoc} code lines.`));
+  // Density, not a raw count: small route handlers with guard clauses or sparse branches over large files are not complex.
+  if (codeLoc >= HIGH_BRANCH_MIN_LOC && branches >= HIGH_BRANCH_MIN_COUNT && branches / codeLoc >= HIGH_BRANCH_DENSITY) {
+    issues.push(issue('branching', null, `High branching density: ${branches} decision points across ${codeLoc} code lines (review whether complex conditionals can be simplified; expected in parsers or dispatchers).`));
   }
 
   const name = path.split('/').pop() ?? path;
@@ -1137,7 +1141,7 @@ function fallbackExplanation(f: Scanned, degree: { in: number; out: number }, sc
   const summary = `${f.name} is ${article} ${role} in ${dir}${exposes}. ${reach}`;
 
   const density = f.codeLoc ? f.branches / f.codeLoc : 0;
-  const level = density < 0.08 ? 'low' : density < 0.18 ? 'moderate' : 'high';
+  const level = density < 0.12 ? 'low' : density < HIGH_BRANCH_DENSITY ? 'moderate' : 'high';
   const complexity = `Branching complexity is ${level}: ${f.branches} decision point${f.branches === 1 ? '' : 's'} across ${f.codeLoc} code lines in a ${f.loc}-line file, with control flow nested up to ${f.depth} level${f.depth === 1 ? '' : 's'}.`;
   const findings = toFindings(f);
   // Never restate branching when a branching finding is already shown; use the dependency fact instead.

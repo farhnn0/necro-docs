@@ -137,6 +137,16 @@ describe('POST /api/patch', () => {
     expect(data.patchedCode).toBe(crlf.replace(FIX.old, FIX.new.replace(/\n/g, '\r\n')));
   });
 
+  it('rejects syntax errors in .mjs patches', async () => {
+    const mjs = 'export function sync(fn) {\n  try { fn(); } catch (e) {}\n}\n';
+    stubModel({ summary: 'Broken', edits: [{ old: '  try { fn(); } catch (e) {}', new: '  try { fn(); } catch (e) { console.error(e' }] });
+    const { data } = await patch({ path: 'scripts/sync.mjs', code: mjs });
+
+    expect(data.provider).toBe('static-fallback');
+    expect(data.patchedCode).toBe(mjs);
+    expect(data.summary).toMatch(/syntax error/i);
+  });
+
   it('validates the request body', async () => {
     expect((await patch({ path: 'src/a.ts' })).status).toBe(400);
     expect((await patch({ path: 'src/a.ts', code: 'x'.repeat(100_001) })).status).toBe(413);

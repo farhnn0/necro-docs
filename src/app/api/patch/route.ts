@@ -118,7 +118,7 @@ function applyEdits(code: string, edits: Edit[], targetLines: number[]): { patch
 }
 
 const syntaxErrors = (path: string, code: string): number =>
-  /\.[jt]sx?$/i.test(path) ? ts.transpileModule(code, { fileName: path, reportDiagnostics: true }).diagnostics?.length ?? 0 : 0;
+  /\.(?:[cm]?js|jsx|tsx?)$/i.test(path) ? ts.transpileModule(code, { fileName: path, reportDiagnostics: true }).diagnostics?.length ?? 0 : 0;
 
 const countByKind = (findings: RepoFinding[]): Map<string, number> =>
   new Map(findings.map((finding) => [finding.kind, Math.max(1, finding.lines.length)]));
