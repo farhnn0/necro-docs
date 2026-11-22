@@ -248,6 +248,17 @@ describe('analyzeRepository', () => {
     expect(result.dependencies).toEqual(['zod', 'vitest']);
   });
 
+  it('resolves overlapping aliases to the most specific pattern, like TypeScript does', async () => {
+    const files: Files = {
+      'tsconfig.json': '{ "compilerOptions": { "paths": { "@/*": ["src/*"], "@/lib/*": ["packages/lib/*"] } } }',
+      'src/page.ts': "import { db } from '@/lib/db';\nexport const page = db;\n",
+      'src/lib/db.ts': 'export const db = 1;\n',
+      'packages/lib/db.ts': 'export const db = 2;\n',
+    };
+    const result = await analyzeRepository('Acme/Shop', { token: '', fetchImpl: fakeGitHub(files).impl });
+    expect(result.edges).toEqual([{ from: 'src/page.ts', to: 'packages/lib/db.ts' }]);
+  });
+
   it('keeps scanner findings and only adds AI findings about lines the model was shown', async () => {
     const reply = JSON.stringify({ files: [{ id: 0, path: 'src/billing/charge.ts', summary: 'Charges the customer.', recommendation: 'Rethrow from the catch.', findings: [
       'Line 6: The catch hides failed inserts.', // same line as the scanner finding: not a second finding

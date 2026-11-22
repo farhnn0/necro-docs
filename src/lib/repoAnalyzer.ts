@@ -870,10 +870,13 @@ function readAliases(configText: string): Aliases {
   const options = (ts.parseConfigFileTextToJson('tsconfig.json', configText).config as { compilerOptions?: { baseUrl?: unknown; paths?: unknown } } | undefined)?.compilerOptions;
   const baseUrl = typeof options?.baseUrl === 'string' ? options.baseUrl : null;
   const paths = options?.paths !== null && typeof options?.paths === 'object' ? Object.entries(options.paths as Record<string, unknown>) : [];
+  // TypeScript picks an exact pattern first, then the wildcard with the longest prefix, whatever the order in the file.
+  const rank = (pattern: string) => (pattern.includes('*') ? pattern.indexOf('*') : pattern.length + 1);
   return {
     baseUrl,
     paths: paths.flatMap(([pattern, targets]): Array<[string, string[]]> =>
-      Array.isArray(targets) ? [[pattern, targets.filter((t): t is string => typeof t === 'string').map((t) => posix.join(baseUrl ?? '.', t))]] : []),
+      Array.isArray(targets) ? [[pattern, targets.filter((t): t is string => typeof t === 'string').map((t) => posix.join(baseUrl ?? '.', t))]] : [])
+      .sort((a, b) => rank(b[0]) - rank(a[0])),
   };
 }
 
