@@ -118,7 +118,7 @@ export function SurgicalPatch({
       const response = await fetch('/api/pr', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { 'x-github-token': token } : {}) },
-        body: JSON.stringify({ repositoryUrl, filePath: path, originalCode: code, patchedCode: state.patchedCode, summary: state.summary, rotScore, fixed: state.fixed, remaining: state.remaining }),
+        body: JSON.stringify({ repositoryUrl, filePath: path, originalCode: code, patchedCode: state.patchedCode, summary: state.summary, rotScore }),
       });
       const payload = await response.json() as { success?: boolean; data?: { prNumber?: number; prUrl?: string }; error?: { code?: string; message?: string } };
       if (response.ok && payload.success && typeof payload.data?.prNumber === 'number' && payload.data.prUrl?.startsWith('https://github.com/')) {

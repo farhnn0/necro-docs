@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { branchNameFor, createPullRequest, matchStyle, prBody, PrError, safeFilePath } from './githubPr';
 
-const original = 'const a = 1;\nconst b = 2;\n';
-const patched = 'const a = 1;\n';
+const original = 'try {\n  run();\n} catch {}\n';
+const patched = 'try {\n  run();\n} catch (error) {\n  console.error(error);\n}\n';
 const b64 = (text: string) => Buffer.from(text).toString('base64');
 
 type Route = [method: string, match: RegExp, status: number, body: unknown];
@@ -26,7 +26,7 @@ const happy = (): Route[] => [
   ['PUT', /contents\/src\/a\.ts$/, 200, {}],
   ['POST', /\/pulls$/, 201, { number: 7, html_url: 'https://github.com/o/r/pull/7' }],
 ];
-const params = { repositoryUrl: 'https://github.com/o/r', filePath: 'src/a.ts', originalCode: original, patchedCode: patched, summary: 'Removed dead code.', rotScore: 81, fixed: ['Empty catch at line 2'], token: 'ghp_x' };
+const params = { repositoryUrl: 'https://github.com/o/r', filePath: 'src/a.ts', originalCode: original, patchedCode: patched, summary: 'Removed dead code.', rotScore: 81, token: 'ghp_x' };
 
 describe('prBody', () => {
   it('lists fixed and remaining findings and claims nothing the patch did not check', () => {
@@ -51,6 +51,7 @@ describe('createPullRequest', () => {
     const pr = calls.find((c) => c.url.endsWith('/pulls'))!;
     expect(pr.body).toMatchObject({ base: 'main', head: result.branch, title: 'fix(a.ts): resolve 1 audit finding' });
     expect(String(pr.body?.body)).toContain('Removed dead code.');
+    expect(String(pr.body?.body)).toMatch(/\*\*Fixed\*\* \(gone in a re-scan of the patched file\):\n- .+/);
   });
 
   it('refuses when GitHub copy differs from the analyzed snapshot, before creating a branch', async () => {

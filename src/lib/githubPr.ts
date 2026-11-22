@@ -1,4 +1,5 @@
-import { parseGitHubUrl } from '@/lib/repoAnalyzer';
+import { parseGitHubUrl, scanSource } from '@/lib/repoAnalyzer';
+import { isPatchable } from '@/lib/types';
 
 export type PrErrorCode =
   | 'INVALID_REQUEST' | 'MISSING_TOKEN' | 'INVALID_TOKEN' | 'NO_PUSH_ACCESS' | 'NOT_FOUND'
@@ -16,9 +17,6 @@ export interface PrParams {
   patchedCode: string;
   summary: string;
   rotScore?: number;
-  /** Findings the patch route's re-scan confirmed gone, and those still reported after the patch. */
-  fixed?: string[];
-  remaining?: string[];
   token: string;
 }
 export interface PrResult { prNumber: number; prUrl: string; branch: string }
@@ -60,7 +58,7 @@ export function prTitle(filePath: string, fixedCount = 0): string {
   return fixedCount > 0 ? `fix(${fileName}): resolve ${fixedCount} audit finding${fixedCount === 1 ? '' : 's'}` : `fix(${fileName}): apply audit fix`;
 }
 
-export function prBody({ filePath, summary, rotScore, fixed, remaining }: Pick<PrParams, 'filePath' | 'summary' | 'rotScore' | 'fixed' | 'remaining'>): string {
+export function prBody({ filePath, summary, rotScore, fixed, remaining }: Pick<PrParams, 'filePath' | 'summary' | 'rotScore'> & { fixed?: string[]; remaining?: string[] }): string {
   const fixedLines = bullets(fixed);
   const remainingLines = bullets(remaining);
   return [
@@ -146,6 +144,10 @@ export async function createPullRequest(params: PrParams, fetchImpl: Fetch = fet
   }
   const content = matchStyle(remote, params.patchedCode);
   if (content === remote) throw new PrError('NO_CHANGES', 'The patch does not change the file.', 422);
+  // Scanned here, not taken from the caller, so the PR never claims a fix the scanner did not see.
+  const after = scanSource(filePath, content).filter(isPatchable);
+  const fixed = scanSource(filePath, remote).filter((finding) => isPatchable(finding) && !after.some((left) => left.kind === finding.kind)).map((finding) => finding.text);
+  const remaining = after.map((finding) => finding.text);
 
   // 4. Branch.
   const branch = branchNameFor(filePath);
@@ -153,7 +155,7 @@ export async function createPullRequest(params: PrParams, fetchImpl: Fetch = fet
   if (!branchRes.ok) fail(branchRes.status, branchRes.data, true);
 
   const cleanup = () => gh(`${repoPath}/git/refs/heads/${encodePath(branch)}`, { method: 'DELETE' }).catch(() => undefined);
-  const title = prTitle(filePath, params.fixed?.length);
+  const title = prTitle(filePath, fixed.length);
   try {
     // 5. Commit.
     const commitRes = await gh(`${repoPath}/contents/${encodePath(filePath)}`, {
@@ -165,7 +167,7 @@ export async function createPullRequest(params: PrParams, fetchImpl: Fetch = fet
     // 6. Pull request.
     const prRes = await gh<{ number?: number; html_url?: string }>(`${repoPath}/pulls`, {
       method: 'POST',
-      body: JSON.stringify({ title, head: branch, base, body: prBody({ filePath, summary: params.summary, rotScore: params.rotScore, fixed: params.fixed, remaining: params.remaining }) }),
+      body: JSON.stringify({ title, head: branch, base, body: prBody({ filePath, summary: params.summary, rotScore: params.rotScore, fixed, remaining }) }),
     });
     if (!prRes.ok) fail(prRes.status, prRes.data, true);
     if (typeof prRes.data.number !== 'number' || !prRes.data.html_url) throw new PrError('GITHUB_ERROR', 'GitHub did not return the pull request.', 502);
