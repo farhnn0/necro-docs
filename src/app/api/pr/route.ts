@@ -3,7 +3,7 @@ import { createPullRequest, PrError } from '@/lib/githubPr';
 
 /**
  * POST /api/pr
- * Body: { repositoryUrl, filePath, originalCode, patchedCode, summary, rotScore? }
+ * Body: { repositoryUrl, filePath, originalCode, patchedCode, summary, rotScore?, fixed?, remaining? }
  * Header `x-github-token` (optional) overrides the server's GITHUB_TOKEN. The token is never logged or returned.
  * Creates a new branch, commits the patched file and opens a pull request. The default branch is never modified.
  */
@@ -15,6 +15,7 @@ export async function POST(request: Request) {
   try { body = await request.json() as Record<string, unknown>; } catch { return fail('INVALID_REQUEST', 'Request body must be valid JSON.', 400); }
 
   const str = (value: unknown) => (typeof value === 'string' ? value : '');
+  const strs = (value: unknown) => (Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []);
   const supplied = request.headers.get('x-github-token')?.trim() ?? '';
   const token = supplied || process.env.GITHUB_TOKEN?.trim() || '';
   if (!token) return fail('MISSING_TOKEN', 'No GitHub token is configured. Add a personal access token to open the PR.', 401);
@@ -28,6 +29,8 @@ export async function POST(request: Request) {
       patchedCode: str(body.patchedCode),
       summary: str(body.summary),
       rotScore: typeof body.rotScore === 'number' && Number.isFinite(body.rotScore) ? body.rotScore : undefined,
+      fixed: strs(body.fixed),
+      remaining: strs(body.remaining),
       token,
     });
     return NextResponse.json({ success: true, data: result, meta: { timestamp: Date.now(), duration: Math.round(performance.now() - startedAt) } });

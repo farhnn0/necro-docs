@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { branchNameFor, createPullRequest, matchStyle, PrError, safeFilePath } from './githubPr';
+import { branchNameFor, createPullRequest, matchStyle, prBody, PrError, safeFilePath } from './githubPr';
 
 const original = 'const a = 1;\nconst b = 2;\n';
 const patched = 'const a = 1;\n';
@@ -26,7 +26,18 @@ const happy = (): Route[] => [
   ['PUT', /contents\/src\/a\.ts$/, 200, {}],
   ['POST', /\/pulls$/, 201, { number: 7, html_url: 'https://github.com/o/r/pull/7' }],
 ];
-const params = { repositoryUrl: 'https://github.com/o/r', filePath: 'src/a.ts', originalCode: original, patchedCode: patched, summary: 'Removed dead code.', rotScore: 81, token: 'ghp_x' };
+const params = { repositoryUrl: 'https://github.com/o/r', filePath: 'src/a.ts', originalCode: original, patchedCode: patched, summary: 'Removed dead code.', rotScore: 81, fixed: ['Empty catch at line 2'], token: 'ghp_x' };
+
+describe('prBody', () => {
+  it('lists fixed and remaining findings and claims nothing the patch did not check', () => {
+    const body = prBody({ filePath: 'src/a.ts', summary: 'Logged the error.\n\nKept the fallback.', rotScore: 81.4, fixed: ['Empty catch at line 2'], remaining: ['`any` at line 9'] });
+    expect(body).toContain('## Summary\n\nLogged the error. Kept the fallback.\n\nFile: `src/a.ts` (rot score before: 81/100)');
+    expect(body).toContain('**Fixed** (gone in a re-scan of the patched file):\n- Empty catch at line 2');
+    expect(body).toContain('**Not changed** (still reported after the patch):\n- `any` at line 9');
+    expect(body).toContain('## Review & Testing Checklist for Human');
+    expect(prBody({ filePath: 'src/a.ts', summary: '' })).not.toContain('**Fixed**');
+  });
+});
 
 describe('createPullRequest', () => {
   it('creates branch, commits patched file and opens the PR', async () => {
@@ -36,9 +47,9 @@ describe('createPullRequest', () => {
     expect(result.branch).toMatch(/^necro\/fix-a-[a-z0-9]+$/);
     const put = calls.find((c) => c.method === 'PUT')!;
     expect(Buffer.from(String(put.body?.content), 'base64').toString()).toBe(patched);
-    expect(put.body).toMatchObject({ sha: 'filesha', branch: result.branch, message: 'fix(forensics): remediate code rot in a.ts [NecroDocs Autopsy]' });
+    expect(put.body).toMatchObject({ sha: 'filesha', branch: result.branch, message: 'fix(a.ts): resolve 1 audit finding' });
     const pr = calls.find((c) => c.url.endsWith('/pulls'))!;
-    expect(pr.body).toMatchObject({ base: 'main', head: result.branch, title: '🩺 fix(forensics): remediate code rot in a.ts' });
+    expect(pr.body).toMatchObject({ base: 'main', head: result.branch, title: 'fix(a.ts): resolve 1 audit finding' });
     expect(String(pr.body?.body)).toContain('Removed dead code.');
   });
 
