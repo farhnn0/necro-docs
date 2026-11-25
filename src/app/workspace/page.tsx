@@ -41,6 +41,15 @@ import {
 import type { IngestErrorState, PresetId, Specimen, SpotlightState, WorkspaceNode } from '@/lib/conversion/types';
 import type { RepoAnalysis } from '@/lib/repoAnalyzer';
 import { IngestProgress } from '@/components/IngestProgress';
+import { AuditComparePanel } from '@/components/AuditComparePanel';
+import {
+  AUDIT_HISTORY_STORAGE_KEY,
+  compareAudits,
+  readAuditHistory,
+  recordAuditSnapshot,
+  snapshotFromSpecimen,
+  type AuditSnapshot,
+} from '@/lib/auditCompare';
 import { buildAutopsyReport, reportFileName, reportToHtml, reportToJson, reportToMarkdown } from '@/lib/report';
 import type { ApiResponse, RepoFinding } from '@/lib/types';
 import SeanceConsole from './SeanceConsole';
@@ -849,7 +858,8 @@ function WorkspaceContent() {
   const [isSearchDebouncing, setIsSearchDebouncing] = useState(false);
   const [minRot, setMinRot] = useState(0);
   const [showComparison, setShowComparison] = useState(false);
-  const [previousAudit, setPreviousAudit] = useState<{ files: number; averageRot: number } | null>(null);
+  const [currentSnapshot, setCurrentSnapshot] = useState<AuditSnapshot | null>(null);
+  const [previousSnapshot, setPreviousSnapshot] = useState<AuditSnapshot | null>(null);
   const [briefOpen, setBriefOpen] = useState(false);
   const briefAudioRef = useRef<HTMLAudioElement | null>(null);
   const [camera, setCamera] = useState<Camera>({ x: 0, y: 20, scale: DEFAULT_SCALE });
@@ -905,22 +915,30 @@ function WorkspaceContent() {
     setCamera({ x: 0, y: 20, scale: DEFAULT_SCALE });
     if (specimenId || !normalizedRepository) {
       setSpecimen(nextSpecimen);
+      setCurrentSnapshot(nextSpecimen ? snapshotFromSpecimen(nextSpecimen) : null);
+      setPreviousSnapshot(null);
+      setShowComparison(false);
       setRequestState({ status: specimenId ? 'success' : 'idle' });
       return () => controller.abort();
     }
 
-    const showAnalysis = (analysis: RepoAnalysis) => {
+    const showAnalysis = (analysis: RepoAnalysis, isFreshIngest: boolean) => {
       const analyzed = convertRepoAnalysis(analysis);
       setSpecimen(analyzed);
       setCamera(initialGraphCamera(buildDisplaySpecimen(analyzed, 'key', []).nodes, canvasViewport()));
       // Jangan buka Autopsy Report otomatis setelah analyze. Inspector muncul setelah node diklik.
       setSelectedNodeId(null);
       setRequestState({ status: 'success', repository: analysis.title });
-      const snapshot = { repository: analysis.title, branch: analysis.defaultBranch, files: analyzed.nodes.length, averageRot: analysis.overallRot, savedAt: Date.now() };
+      const snapshot = snapshotFromSpecimen(analyzed);
+      setCurrentSnapshot(snapshot);
       try {
-        const history = JSON.parse(localStorage.getItem('necro:audit-history') || '[]') as typeof snapshot[];
-        localStorage.setItem('necro:audit-history', JSON.stringify([snapshot, ...history.filter((item) => item.repository !== snapshot.repository)].slice(0, 10)));
-      } catch { /* history is optional */ }
+        const existing = readAuditHistory(localStorage.getItem(AUDIT_HISTORY_STORAGE_KEY));
+        const { history, previous } = recordAuditSnapshot(existing, snapshot, { isFreshIngest });
+        localStorage.setItem(AUDIT_HISTORY_STORAGE_KEY, JSON.stringify(history));
+        setPreviousSnapshot(previous);
+      } catch {
+        setPreviousSnapshot(null);
+      }
     };
 
     // The landing page already analyzed this repository and left the result in sessionStorage.
@@ -928,7 +946,7 @@ function WorkspaceContent() {
     try { stored = window.sessionStorage.getItem(ACTIVE_REPO_STORAGE_KEY); } catch { /* storage unavailable */ }
     const cached = readActiveRepo(stored, repo ?? '');
     if (cached) {
-      showAnalysis(cached);
+      showAnalysis(cached, false);
       return () => controller.abort();
     }
 
@@ -955,7 +973,7 @@ function WorkspaceContent() {
           setRequestState(createIngestErrorState(response.ok ? undefined : error?.code, repo ?? undefined, error?.details));
           return;
         }
-        showAnalysis(payload);
+        showAnalysis(payload, true);
       } catch {
         if (!controller.signal.aborted) setRequestState(createIngestErrorState('NETWORK_ERROR', repo ?? undefined));
       }
@@ -974,6 +992,9 @@ function WorkspaceContent() {
     activeControllerRef.current?.abort();
     const next = getPresetSpecimen(id);
     setSpecimen(next);
+    setCurrentSnapshot(snapshotFromSpecimen(next));
+    setPreviousSnapshot(null);
+    setShowComparison(false);
     setSource({ repo: null, specimenId: id });
     setSelectedNodeId(null);
     setRequestState({ status: 'success', showingSample: true });
@@ -1066,10 +1087,28 @@ function WorkspaceContent() {
     });
   };
 
-  const loadPreviousAudit = () => {
-    const history = JSON.parse(localStorage.getItem('necro:audit-history') || '[]') as { files: number; averageRot: number }[];
-    setPreviousAudit(history[0] ?? null);
-    setShowComparison(true);
+  const auditComparison = useMemo(
+    () => (previousSnapshot && currentSnapshot ? compareAudits(previousSnapshot, currentSnapshot) : null),
+    [previousSnapshot, currentSnapshot],
+  );
+
+  const reanalyzeRepo = () => {
+    try { window.sessionStorage.removeItem(ACTIVE_REPO_STORAGE_KEY); } catch { /* storage unavailable */ }
+    setShowComparison(false);
+    setRetryNonce((value) => value + 1);
+  };
+
+  const focusComparedFile = (path: string) => {
+    setShowComparison(false);
+    if (!specimen) return;
+    const node = specimen.nodes.find((candidate) => candidate.path === path);
+    if (!node) return;
+    setSpotlightNodeIds([]);
+    setImpactOriginId(null);
+    setSelectedNodeId(node.id);
+    const view = buildDisplaySpecimen(specimen, graphScope, revealIds(node.id, null, []));
+    const target = view.nodes.filter((candidate) => candidate.id === node.id);
+    if (target.length > 0) setCamera(fitFocusCamera(view.nodes, target, canvasViewport()));
   };
   const analyzeBlastRadius = () => {
     if (!specimen || !selectedNodeId) return;
@@ -1152,17 +1191,36 @@ function WorkspaceContent() {
           {requestState.status === 'success' && requestState.showingSample && <span className="hidden font-mono text-[10px] text-amber rounded-full bg-amber/10 px-2.5 py-0.5 sm:inline">Sample Data</span>}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={loadPreviousAudit}
-            className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent ${
-              showComparison ? 'border-ink bg-ink text-white shadow-xs' : 'border-hairline text-muted hover:bg-surface hover:text-ink'
-            }`}
-            title="Compare current audit with previous snapshot"
-          >
-            <GitCompare size={13} />
-            <span className="hidden sm:inline">Compare</span>
-          </button>
+          {specimen && (
+            <button
+              type="button"
+              onClick={() => setShowComparison((open) => !open)}
+              className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent ${
+                showComparison ? 'border-ink bg-ink text-white shadow-xs' : 'border-hairline bg-white text-ink shadow-2xs hover:bg-surface'
+              }`}
+              title={auditComparison ? 'Compare current audit with previous snapshot' : 'View baseline snapshot and audit comparison'}
+            >
+              <GitCompare size={13} className={showComparison ? 'text-white' : 'text-muted'} />
+              <span className="hidden sm:inline">Compare</span>
+              {auditComparison && (
+                <span
+                  className={`rounded-full px-1.5 py-0.2 font-mono text-[10px] font-semibold ${
+                    showComparison
+                      ? 'bg-white/20 text-white'
+                      : auditComparison.overallRot.delta < 0
+                        ? 'bg-emerald/10 text-emerald'
+                        : auditComparison.overallRot.delta > 0
+                          ? 'bg-crimson/10 text-crimson'
+                          : 'bg-surface text-muted'
+                  }`}
+                >
+                  {auditComparison.overallRot.delta === 0
+                    ? '0'
+                    : `${auditComparison.overallRot.delta > 0 ? '+' : '−'}${Math.abs(auditComparison.overallRot.delta)}`}
+                </span>
+              )}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setBriefOpen(true)}
@@ -1210,31 +1268,7 @@ function WorkspaceContent() {
         </div>
       </header>
 
-      {showComparison && specimen && (
-        <div className="z-20 flex shrink-0 items-center justify-between border-b border-hairline bg-surface/90 px-4 py-2 text-xs text-muted backdrop-blur-sm">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-mono text-[10px] font-semibold text-ink bg-white border border-hairline px-2 py-0.5 rounded-md">
-              AUDIT COMPARISON
-            </span>
-            <span>Current: <strong className="text-ink">{specimen.nodes.length} files, {Math.round(specimen.nodes.reduce((sum, node) => sum + node.rotScore, 0) / Math.max(1, specimen.nodes.length))} rot</strong></span>
-            <span className="text-muted/50">·</span>
-            <span>{previousAudit ? <>Previous: <strong className="text-ink">{previousAudit.files} files, {previousAudit.averageRot} rot</strong></> : 'No previous snapshot recorded yet for this repository.'}</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setShowComparison(false)}
-            className="flex h-6 w-6 items-center justify-center rounded-md text-muted transition hover:bg-white hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink"
-            aria-label="Close comparison"
-            title="Close comparison"
-          >
-            <X size={13} />
-          </button>
-        </div>
-      )}
-
-      {specimen && <div className={`absolute left-1/2 z-30 flex -translate-x-1/2 items-center gap-2.5 rounded-2xl border border-hairline bg-white/95 px-3 py-1.5 shadow-[0_12px_32px_-4px_rgba(17,17,19,0.10)] backdrop-blur-md transition-all duration-200 max-w-[95vw] ${
-        showComparison ? 'top-26 sm:top-[104px]' : 'top-16'
-      }`}>
+      {specimen && <div className="absolute left-1/2 top-16 z-30 flex -translate-x-1/2 items-center gap-2.5 rounded-2xl border border-hairline bg-white/95 px-3 py-1.5 shadow-[0_12px_32px_-4px_rgba(17,17,19,0.10)] backdrop-blur-md transition-all duration-200 max-w-[95vw]">
         <div className="relative w-40 sm:w-56">
           <Search size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
           <Input
@@ -1315,6 +1349,16 @@ function WorkspaceContent() {
         </div>
       </div>}
       {briefOpen && specimen && <div role="dialog" aria-modal="true" aria-labelledby="repo-brief-title" className="fixed inset-0 z-50 flex items-center justify-center bg-ink/20 p-6" onClick={() => setBriefOpen(false)}><div className="w-full max-w-lg rounded-2xl border border-hairline bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><div className="flex items-center justify-between"><div><p className="font-mono text-[10px] text-muted">EXECUTIVE REPO BRIEFING</p><h2 id="repo-brief-title" className="mt-1 font-display text-lg font-medium">{specimen.title}</h2></div><button type="button" onClick={() => setBriefOpen(false)} className="rounded-full border border-hairline px-2.5 py-1 text-xs text-muted">Close</button></div><p className="mt-4 text-sm leading-relaxed text-muted">{briefText}</p><h3 className="mt-5 font-display text-[13px] font-medium">Top refactoring priorities</h3><ol className="mt-2 space-y-2">{briefNodes.map((node, index) => <li key={node.id} className="flex items-center justify-between rounded-lg bg-surface px-3 py-2 text-xs"><span><b className="mr-2 font-mono text-muted">0{index + 1}</b>{node.name}</span><span className="font-mono text-crimson">{node.rotScore} rot</span></li>)}</ol><button type="button" onClick={speakBrief} className="mt-5 flex items-center gap-2 rounded-xl bg-ink px-3 py-2 text-xs font-medium text-white"><Volume2 size={14} />Listen to 15s Brief</button></div></div>}
+      {showComparison && currentSnapshot && (
+        <AuditComparePanel
+          current={currentSnapshot}
+          comparison={auditComparison}
+          canReanalyze={specimen?.kind === 'ingested'}
+          onReanalyze={reanalyzeRepo}
+          onSelectFile={focusComparedFile}
+          onClose={() => setShowComparison(false)}
+        />
+      )}
 
       {requestState.status === 'loading' && (
         <div className="border-b border-hairline bg-surface px-5 py-4">
