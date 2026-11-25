@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Necro scan on save",
+      "trigger": "PostFileSave",
+      "description": "After saving a src ts/tsx file, scan it with necro-docs scan_code and report only new patchable findings.",
+      "matcher": "src[\\\\/].*\\.(ts|tsx)$",
+      "action": {
+        "type": "agent",
+        "prompt": "A src TypeScript file was just saved. Read the saved file and call the necro-docs scan_code tool with its repo-relative path and current content. Compare with the previous scan_code result for this file in this session, if any. Report in ONE short message only the findings that are new and have patchable: true. If there are none, say nothing. Do not edit files and do not call synthesize_patch unless the user asks."
+      }
+    }
+  ]
+}

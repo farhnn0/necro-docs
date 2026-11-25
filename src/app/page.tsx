@@ -12,11 +12,13 @@ import {
 } from 'lucide-react';
 import {
   ACTIVE_REPO_STORAGE_KEY,
-  ingestErrorMessage,
+  ingestErrorHelp,
+  type IngestErrorHelp,
   isRepoAnalysis,
   scrollyStep,
   workspaceTargetHref,
 } from '@/lib/conversion/helpers';
+import { IngestProgress } from '@/components/IngestProgress';
 import { GitHubRepoPickerModal } from '@/components/GitHubRepoPickerModal';
 import type { GitHubRepoSummary } from '@/lib/auth/github-app';
 
@@ -33,20 +35,12 @@ const presets = [
   ['realtime', '26% infected · Node.js', 'edge-socket-relay', 'Clean WebSocket pub/sub broker with isolated heartbeat cleanup and well-typed payloads.', 'text-emerald'],
 ] as const;
 
-/** The analysis is one request, so these stages are paced by time while it runs. */
-const analysisStages = [
-  'Resolving default branch',
-  'Fetching file tree',
-  'Reading source files',
-  'Scanning imports and code rot',
-] as const;
-const STAGE_INTERVAL_MS = 1100;
 const REQUEST_TIMEOUT_MS = 65_000;
 
 type AnalysisState =
   | { status: 'idle' }
-  | { status: 'loading'; stage: number }
-  | { status: 'error'; message: string };
+  | { status: 'loading'; repository: string }
+  | ({ status: 'error' } & IngestErrorHelp);
 
 function WorkspaceLink({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return <a href={workspaceTargetHref({ kind: 'preset', id: 'payment' })} className={`${className} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent`}>{children}</a>;
@@ -146,12 +140,7 @@ export default function Home() {
     const controller = new AbortController();
     analysisController.current?.abort();
     analysisController.current = controller;
-    setAnalysis({ status: 'loading', stage: 0 });
-    const ticker = window.setInterval(() => {
-      setAnalysis((state) => state.status === 'loading'
-        ? { status: 'loading', stage: Math.min(state.stage + 1, analysisStages.length - 1) }
-        : state);
-    }, STAGE_INTERVAL_MS);
+    setAnalysis({ status: 'loading', repository: value });
     const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
@@ -163,8 +152,8 @@ export default function Home() {
       });
       const payload: unknown = await response.json().catch(() => null);
       if (!response.ok || !isRepoAnalysis(payload)) {
-        const code = (payload as { error?: { code?: string } } | null)?.error?.code;
-        setAnalysis({ status: 'error', message: ingestErrorMessage(response.ok ? undefined : code) });
+        const error = (payload as { error?: { code?: string; details?: Record<string, unknown> } } | null)?.error;
+        setAnalysis({ status: 'error', ...ingestErrorHelp(response.ok ? undefined : error?.code, error?.details) });
         return;
       }
       try {
@@ -175,10 +164,9 @@ export default function Home() {
       window.location.assign(workspaceTargetHref({ kind: 'repository', repository: payload.title }));
     } catch {
       if (analysisController.current === controller) {
-        setAnalysis({ status: 'error', message: controller.signal.aborted ? 'The analysis timed out.' : 'The server could not be reached.' });
+        setAnalysis({ status: 'error', ...ingestErrorHelp(controller.signal.aborted ? 'REQUEST_TIMEOUT' : 'NETWORK_ERROR') });
       }
     } finally {
-      window.clearInterval(ticker);
       window.clearTimeout(timeout);
     }
   }, [analysis.status]);
@@ -237,18 +225,14 @@ export default function Home() {
               {installationId && <span className="h-1.5 w-1.5 rounded-full bg-emerald" title="GitHub App connected" />}
             </button>
           </div>
-          {analysis.status === 'loading' && (
-            <ol role="status" aria-live="polite" aria-label="Analysis progress" className="mx-auto mt-4 flex max-w-xl flex-wrap justify-center gap-x-5 gap-y-1 font-mono text-[11px]">
-              {analysisStages.map((label, index) => {
-                const state = index < analysis.stage ? 'done' : index === analysis.stage ? 'active' : 'pending';
-                return <li key={label} aria-current={state === 'active' ? 'step' : undefined} className={state === 'pending' ? 'text-muted/60' : state === 'done' ? 'text-muted' : 'animate-pulse font-semibold text-ink'}>{state === 'done' ? '✓ ' : state === 'active' ? '› ' : '· '}{label}</li>;
-              })}
-            </ol>
-          )}
+          {analysis.status === 'loading' && <div className="mt-4"><IngestProgress repository={analysis.repository} /></div>}
           {analysis.status === 'error' && (
             <div role="alert" className="mx-auto mt-4 max-w-xl rounded-2xl border border-crimson/30 bg-surface px-4 py-3 text-left text-xs">
-              <p className="font-medium text-crimson">{analysis.message}</p>
-              <p className="mt-2 text-muted">Or explore a sample specimen instead:</p>
+              <p className="font-display text-sm font-medium text-crimson">{analysis.title}</p>
+              <p className="mt-1 text-muted">{analysis.message}</p>
+              {analysis.hint && <p className="mt-2 leading-relaxed text-muted">{analysis.hint}</p>}
+              {analysis.connectGithub && <button type="button" onClick={handleOpenGithubPicker} className="mt-3 rounded-full bg-ink px-3 py-1.5 font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">Connect GitHub App</button>}
+              <p className="mt-3 text-muted">Or explore a sample specimen instead:</p>
               <div className="mt-1.5 flex flex-wrap gap-2">{presets.map(([id, , name]) => <a key={id} href={workspaceTargetHref({ kind: 'preset', id })} className="rounded-full border border-hairline bg-white px-3 py-1 font-mono text-[11px] hover:bg-hairline/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">{name}</a>)}</div>
             </div>
           )}

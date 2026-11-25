@@ -1,5 +1,7 @@
 # Necro-Docs: AI Codebase Archaeologist & Interactive Voice Debugger
 
+> Current implementation note: the authoritative architecture is `.kiro/steering/current-architecture.md`. This legacy guide contains background examples; follow the current guide when its examples differ.
+
 **Project**: Necro-Docs (Kiroween Hackathon - Frankenstein Category)
 
 **Tagline**: Resurrection of Legacy Code Through Intelligent Analysis & Voice-Guided Debugging

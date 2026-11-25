@@ -1,5 +1,18 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Use Necro-Docs from Kiro (MCP)
+
+1. Install: `npm ci`
+2. Create `.env.local`. `GITHUB_TOKEN` is strongly recommended (without it GitHub rate limits are low). An AI key is optional: without one, `synthesize_patch` falls back to static fixes.
+3. Start the app: `npm run dev` (the MCP server calls `http://localhost:3000`; override with `NECRO_API_URL`).
+4. In Kiro, enable the `necro-docs` server from `.kiro/settings/mcp.json` (MCP Servers panel). `synthesize_patch` is never auto-approved; you review every patch.
+5. Try these prompts:
+   - "Analyze github.com/owner/repo with necro-docs and list the worst files."
+   - "Show findings for src/lib/foo.ts in owner/repo and tell me which are auto-fixable."
+   - "Synthesize a patch for src/lib/foo.ts in owner/repo, show me the diff, and apply it only after I approve."
+
+The workflow rules live in `.kiro/steering/necro-surgeon.md`.
+
 ## Getting Started
 
 First, run the development server:

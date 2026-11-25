@@ -1,5 +1,7 @@
 # Necro-Docs: Shared Types & Utilities Guide
 
+> Current analyzer and workspace contracts are documented in `.kiro/steering/current-architecture.md` and `.kiro/specs/github-ingest-coderot/current-implementation.md`. The examples below are generic unless marked current.
+
 Panduan untuk shared types, constants, dan utility functions yang digunakan di seluruh Necro-Docs.
 
 ## Shared Types Structure

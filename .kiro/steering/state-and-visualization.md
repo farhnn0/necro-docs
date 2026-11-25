@@ -1,5 +1,7 @@
 # Necro-Docs: State Management & Visualization Guide
 
+> Current implementation note: use `.kiro/steering/current-architecture.md` for the shipped graph, key/revealed/all scope, SVG layout, and floating inspector. The React Flow examples below are legacy patterns.
+
 ## Zustand State Management Patterns
 
 ### Store Architecture

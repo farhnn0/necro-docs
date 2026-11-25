@@ -92,6 +92,9 @@ export type IngestErrorState = {
   message: string;
   code?: string;
   repository?: string;
+  title?: string;
+  hint?: string;
+  connectGithub?: boolean;
 };
 
 export type IngestRequestState =

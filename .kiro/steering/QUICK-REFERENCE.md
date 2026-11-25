@@ -1,5 +1,7 @@
 # Necro-Docs: Quick Reference & Navigation
 
+> Start with `.kiro/steering/current-architecture.md`. It is the current source of truth for analyzer coverage, AST findings, graph visibility, Voice Séance, and PR behavior.
+
 Panduan cepat untuk menemukan informasi yang Anda butuhkan dalam dokumentasi Necro-Docs.
 
 ## 📖 Documentation Map

@@ -1,5 +1,7 @@
 # Necro-Docs: Steering Documentation - Complete Summary
 
+> This summary describes the original documentation package. For current shipped behavior, use `current-architecture.md` first.
+
 ## 📦 What Has Been Created
 
 A comprehensive steering documentation suite untuk proyek **Necro-Docs** (AI Codebase Archaeologist & Interactive Voice Debugger) - Kiroween Hackathon, Frankenstein Category.

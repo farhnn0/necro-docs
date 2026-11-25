@@ -12,7 +12,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { ChevronDown, ChevronLeft, Code, Download, FileText, Flame, GitCompare, GripVertical, Maximize2, Mic, Minimize2, RotateCcw, Search, Volume2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronDown, ChevronLeft, Code, Download, FileDown, FileText, Flame, GitCompare, GripVertical, Maximize2, Mic, Minimize2, RotateCcw, Search, Volume2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import {
   DndContext,
   useDraggable,
@@ -40,6 +40,8 @@ import {
 } from '@/lib/conversion/specimens';
 import type { IngestErrorState, PresetId, Specimen, SpotlightState, WorkspaceNode } from '@/lib/conversion/types';
 import type { RepoAnalysis } from '@/lib/repoAnalyzer';
+import { IngestProgress } from '@/components/IngestProgress';
+import { buildAutopsyReport, reportFileName, reportToHtml, reportToJson, reportToMarkdown } from '@/lib/report';
 import type { ApiResponse, RepoFinding } from '@/lib/types';
 import SeanceConsole from './SeanceConsole';
 import { GraphScopeBar } from './GraphScopeBar';
@@ -91,6 +93,15 @@ const speechErrorMessages: Record<string, string> = {
   network: 'Speech recognition could not reach its service. You can still type a question.',
   aborted: 'Voice input was stopped. You can still type a question.',
 };
+
+function SampleLinks({ onChoose }: { onChoose: (id: PresetId) => void }) {
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <span>Or open a sample specimen:</span>
+      {PRESET_IDS.map((id) => <button key={id} type="button" onClick={() => onChoose(id)} className="rounded-full border border-hairline bg-white px-3 py-1 font-mono text-[11px] text-ink hover:bg-hairline/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">{getPresetSpecimen(id).title.split('/').pop()}</button>)}
+    </div>
+  );
+}
 
 function PresetChoices({ onChoose }: { onChoose?: (id: PresetId) => void }) {
   return (
@@ -840,10 +851,11 @@ function WorkspaceContent() {
   const [showComparison, setShowComparison] = useState(false);
   const [previousAudit, setPreviousAudit] = useState<{ files: number; averageRot: number } | null>(null);
   const [briefOpen, setBriefOpen] = useState(false);
+  const briefAudioRef = useRef<HTMLAudioElement | null>(null);
   const [camera, setCamera] = useState<Camera>({ x: 0, y: 20, scale: DEFAULT_SCALE });
   const [graphScope, setGraphScope] = useState<GraphScope>('key');
   const [requestState, setRequestState] = useState<
-    { status: 'idle' | 'loading' | 'success'; repository?: string; partial?: boolean; showingSample?: boolean; isSlow?: boolean } | IngestErrorState
+    { status: 'idle' | 'loading' | 'success'; repository?: string; partial?: boolean; showingSample?: boolean } | IngestErrorState
   >({ status: 'idle' });
   const [retryNonce, setRetryNonce] = useState(0);
   const [synthesizedPatches, setSynthesizedPatches] = useState<Record<string, CachedPatch>>(() => {
@@ -921,10 +933,7 @@ function WorkspaceContent() {
     }
 
     setSpecimen(null);
-    setRequestState({ status: 'loading', repository: repo ?? normalizedRepository, isSlow: false });
-    const slowTimer = window.setTimeout(() => {
-      if (!controller.signal.aborted) setRequestState({ status: 'loading', repository: repo ?? normalizedRepository ?? '', isSlow: true });
-    }, 8000);
+    setRequestState({ status: 'loading', repository: repo ?? normalizedRepository });
     void (async () => {
       try {
         const response = await fetch('/api/ingest', {
@@ -942,17 +951,16 @@ function WorkspaceContent() {
         }
         if (controller.signal.aborted) return;
         if (!response.ok || !isRepoAnalysis(payload)) {
-          const code = (payload as ApiResponse<null> | null)?.error?.code;
-          setRequestState(createIngestErrorState(response.ok ? undefined : code, repo ?? undefined));
+          const error = (payload as ApiResponse<null> | null)?.error;
+          setRequestState(createIngestErrorState(response.ok ? undefined : error?.code, repo ?? undefined, error?.details));
           return;
         }
         showAnalysis(payload);
       } catch {
-        if (!controller.signal.aborted) setRequestState({ status: 'error', message: 'The server could not be reached.', repository: repo ?? undefined });
+        if (!controller.signal.aborted) setRequestState(createIngestErrorState('NETWORK_ERROR', repo ?? undefined));
       }
     })();
     return () => {
-      window.clearTimeout(slowTimer);
       controller.abort();
       if (activeControllerRef.current === controller) activeControllerRef.current = null;
     };
@@ -1040,18 +1048,21 @@ function WorkspaceContent() {
     setCamera(fitCamera(buildDisplaySpecimen(specimen, next, revealIds(selectedNodeId, impactOriginId, spotlightNodeIds)).nodes, canvasViewport()));
   };
 
-  const exportReport = (format: 'json' | 'md') => {
+  const exportReport = (format: 'json' | 'md' | 'pdf') => {
     if (!specimen) return;
-    const report = format === 'json'
-      ? JSON.stringify({ title: specimen.title, summary: specimen.summary, nodes: specimen.nodes, edges: specimen.edges }, null, 2)
-      : `# ${specimen.title}\n\n${specimen.summary}\n\n## Files\n${specimen.nodes.map((node) => `- ${node.path}: ${node.rotScore}/100 rot, ${node.linesOfCode} LOC`).join('\n')}`;
-    const blob = new Blob([report], { type: format === 'json' ? 'application/json' : 'text/markdown' });
+    const report = buildAutopsyReport(specimen);
+    if (format === 'pdf') {
+      printHtml(reportToHtml(report), reportFileName(report, 'pdf').replace(/\.pdf$/, ''));
+      toast.add({ type: 'success', title: 'PDF report ready', description: 'Choose "Save as PDF" in the print dialog.' });
+      return;
+    }
+    const blob = new Blob([format === 'json' ? reportToJson(report) : reportToMarkdown(report)], { type: format === 'json' ? 'application/json' : 'text/markdown' });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement('a'); link.href = url; link.download = `${specimen.title.replace(/[^a-z0-9]+/gi, '-')}.${format === 'json' ? 'json' : 'md'}`; link.click(); URL.revokeObjectURL(url);
+    const link = document.createElement('a'); link.href = url; link.download = reportFileName(report, format); link.click(); URL.revokeObjectURL(url);
     toast.add({
       type: 'success',
       title: 'Report exported',
-      description: `Downloaded ${format.toUpperCase()} autopsy brief.`,
+      description: `Downloaded ${format.toUpperCase()} autopsy report.`,
     });
   };
 
@@ -1092,7 +1103,23 @@ function WorkspaceContent() {
 
   const briefNodes = [...(specimen?.nodes ?? [])].sort((a, b) => b.rotScore - a.rotScore).slice(0, 3);
   const briefText = specimen ? `${specimen.title} has ${specimen.nodes.length} analyzed files with an overall rot score of ${specimen.kind === 'ingested' ? specimen.overallRot : specimen.summary}. The top priorities are ${briefNodes.map((node) => node.name).join(', ')}.` : '';
-  const speakBrief = () => { if ('speechSynthesis' in window) { window.speechSynthesis.cancel(); const utterance = new SpeechSynthesisUtterance(briefText); utterance.rate = 1.02; window.speechSynthesis.speak(utterance); } };
+  const speakBrief = async () => {
+    window.speechSynthesis?.cancel();
+    briefAudioRef.current?.pause();
+    try {
+      const response = await fetch('/api/speech', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: briefText }) });
+      const audioBase64 = response.ok ? ((await response.json()) as { data?: { audioBase64?: string | null } }).data?.audioBase64 : null;
+      if (audioBase64) {
+        briefAudioRef.current = new Audio(`data:audio/mp3;base64,${audioBase64}`);
+        await briefAudioRef.current.play();
+        return;
+      }
+    } catch { /* fall back to the browser voice */ }
+    if (!('speechSynthesis' in window)) return;
+    const utterance = new SpeechSynthesisUtterance(briefText);
+    utterance.rate = 1.02;
+    window.speechSynthesis.speak(utterance);
+  };
 
   const handleSpotlight = ({ nodeIds, selectedNodeId: responseSelection }: SpotlightState) => {
     const origin = responseSelection ?? selectedNodeId;
@@ -1157,6 +1184,13 @@ function WorkspaceContent() {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-52 rounded-xl p-1 shadow-lg border-hairline bg-white">
+              <DropdownMenuItem onClick={() => exportReport('pdf')} className="cursor-pointer gap-2 rounded-lg px-2.5 py-2 text-xs text-ink hover:bg-surface">
+                <FileDown size={14} className="text-muted" />
+                <div className="flex flex-col">
+                  <span className="font-medium">PDF Report</span>
+                  <span className="text-[10px] text-muted">Printable autopsy (.pdf)</span>
+                </div>
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => exportReport('md')} className="cursor-pointer gap-2 rounded-lg px-2.5 py-2 text-xs text-ink hover:bg-surface">
                 <FileText size={14} className="text-muted" />
                 <div className="flex flex-col">
@@ -1168,7 +1202,7 @@ function WorkspaceContent() {
                 <Code size={14} className="text-muted" />
                 <div className="flex flex-col">
                   <span className="font-medium">JSON Graph Data</span>
-                  <span className="text-[10px] text-muted">Nodes & edges schema (.json)</span>
+                  <span className="text-[10px] text-muted">Machine-readable report (.json)</span>
                 </div>
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -1283,18 +1317,32 @@ function WorkspaceContent() {
       {briefOpen && specimen && <div role="dialog" aria-modal="true" aria-labelledby="repo-brief-title" className="fixed inset-0 z-50 flex items-center justify-center bg-ink/20 p-6" onClick={() => setBriefOpen(false)}><div className="w-full max-w-lg rounded-2xl border border-hairline bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><div className="flex items-center justify-between"><div><p className="font-mono text-[10px] text-muted">EXECUTIVE REPO BRIEFING</p><h2 id="repo-brief-title" className="mt-1 font-display text-lg font-medium">{specimen.title}</h2></div><button type="button" onClick={() => setBriefOpen(false)} className="rounded-full border border-hairline px-2.5 py-1 text-xs text-muted">Close</button></div><p className="mt-4 text-sm leading-relaxed text-muted">{briefText}</p><h3 className="mt-5 font-display text-[13px] font-medium">Top refactoring priorities</h3><ol className="mt-2 space-y-2">{briefNodes.map((node, index) => <li key={node.id} className="flex items-center justify-between rounded-lg bg-surface px-3 py-2 text-xs"><span><b className="mr-2 font-mono text-muted">0{index + 1}</b>{node.name}</span><span className="font-mono text-crimson">{node.rotScore} rot</span></li>)}</ol><button type="button" onClick={speakBrief} className="mt-5 flex items-center gap-2 rounded-xl bg-ink px-3 py-2 text-xs font-medium text-white"><Volume2 size={14} />Listen to 15s Brief</button></div></div>}
 
       {requestState.status === 'loading' && (
-        <div role="status" aria-live="polite" className="border-b border-hairline bg-surface px-5 py-3 font-mono text-xs">
-          <div>Analyzing repository… {requestState.repository}</div>
-          <button type="button" onClick={cancelIngest} className="mt-2 rounded-full border border-ink px-3 py-1.5 font-sans text-xs text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">Cancel</button>
-          {requestState.isSlow && <><p className="mt-3">This is taking longer than usual.</p><PresetChoices onChoose={choosePreset} /></>}
+        <div className="border-b border-hairline bg-surface px-5 py-4">
+          <IngestProgress repository={requestState.repository} onCancel={cancelIngest}>
+            <SampleLinks onChoose={choosePreset} />
+          </IngestProgress>
         </div>
       )}
       {requestState.status === 'error' && (
-        <div role="alert" className="border-b border-hairline bg-surface px-5 py-3 text-xs">
-          <span>{requestState.message}</span>
-          {requestState.code && <span className="ml-2 font-mono text-muted">{requestState.code}</span>}
-          <div className="mt-3 flex gap-2"><button type="button" onClick={retryIngest} className="rounded-full border border-ink px-3 py-1.5 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">Try again</button></div>
-          <PresetChoices onChoose={choosePreset} />
+        <div className="border-b border-hairline bg-surface px-5 py-4">
+          <div role="alert" className="mx-auto max-w-xl rounded-2xl border border-crimson/30 bg-white p-4 text-xs shadow-sm">
+            <div className="flex items-start gap-3">
+              <span aria-hidden="true" className="mt-1 h-2 w-2 shrink-0 rounded-full bg-crimson" />
+              <div className="min-w-0 flex-1">
+                <p className="font-display text-sm font-medium text-ink">{requestState.title ?? 'Analysis failed'}</p>
+                <p className="mt-1 text-muted">{requestState.message}</p>
+                {requestState.repository && <p className="mt-1 truncate font-mono text-[11px] text-ink">{requestState.repository}</p>}
+                {requestState.hint && <p className="mt-2 leading-relaxed text-muted">{requestState.hint}</p>}
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <button type="button" onClick={retryIngest} className="rounded-full bg-ink px-3 py-1.5 font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">Try again</button>
+                  {requestState.connectGithub && <a href="/api/auth/github/install" className="rounded-full border border-ink px-3 py-1.5 font-medium text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">Connect GitHub App</a>}
+                  <Link href="/" className="rounded-full border border-hairline px-3 py-1.5 text-ink hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyAccent">Analyze another repository</Link>
+                  {requestState.code && <span className="ml-auto font-mono text-[10px] text-muted">{requestState.code}</span>}
+                </div>
+              </div>
+            </div>
+            <div className="mt-3 border-t border-hairline pt-3 text-muted"><SampleLinks onChoose={choosePreset} /></div>
+          </div>
         </div>
       )}
 
@@ -1346,6 +1394,27 @@ function WorkspaceContent() {
       )}
     </main>
   );
+}
+
+/** Prints standalone HTML through a hidden iframe so the browser can save it as PDF. */
+function printHtml(html: string, title: string) {
+  const frame = document.createElement('iframe');
+  frame.setAttribute('aria-hidden', 'true');
+  frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+  frame.onload = () => {
+    const win = frame.contentWindow;
+    if (!win) return;
+    // Browsers name the saved PDF after the top document's title.
+    const previousTitle = document.title;
+    document.title = title;
+    const cleanup = () => { document.title = previousTitle; frame.remove(); };
+    win.addEventListener('afterprint', cleanup, { once: true });
+    win.focus();
+    win.print();
+    setTimeout(cleanup, 60_000);
+  };
+  frame.srcdoc = html;
+  document.body.appendChild(frame);
 }
 
 export default function WorkspacePage() {

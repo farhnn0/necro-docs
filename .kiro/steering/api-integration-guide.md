@@ -1,5 +1,7 @@
 # Necro-Docs: API Integration & Backend Patterns
 
+> Current implementation note: analyzer, Voice Séance, TTS, Surgical Patch, and PR routes follow `.kiro/steering/current-architecture.md` and the analyzer SDD. Examples below are generic patterns unless marked current.
+
 ## API Architecture Overview
 
 Necro-Docs menggunakan Next.js API Routes untuk backend logic, dengan clear separation antara client-side (React/Zustand) dan server-side (API routes).

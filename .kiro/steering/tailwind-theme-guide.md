@@ -1,5 +1,7 @@
 # Necro-Docs: Tailwind Theme & Styling Guide
 
+> Current implementation uses the clean modern light UI. The current product layout and floating workspace panels are documented in `.kiro/steering/current-architecture.md`; older dark cyber-gothic examples below are historical references.
+
 ## Theme Configuration
 
 ### Clean Modern Minimal Design

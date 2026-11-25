@@ -1,0 +1,471 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1.1 Verify the installed MCP SDK and Zod APIs, then add only the required runtime/dev dependencies or project test configuration needed to import `@modelcontextprotocol/sdk`, `zod`, and Vitest from `mcp/server.ts` and its tests.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365820294
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365831052
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365985780
+      }
+    ],
+    "1.2 Define the server-local TypeScript interfaces and bounded constants for tool names, cache entries, compact analysis/findings, patch responses, and derived verification results.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365820373
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365831309
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365986039
+      }
+    ],
+    "2.1 Implement strict schemas for `analyze_repo`, `get_findings`, `scan_code`, and `synthesize_patch`, including trimming, bounded lengths, optional dependency/importer arrays, and rejection of unknown keys.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365820445
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365989744
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366116074
+      }
+    ],
+    "2.2 Write Vitest schema validation tests covering valid inputs, empty and malformed strings, oversized URL/path/code/list values, unknown keys, and optional array bounds.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365820502
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366324949
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366380115
+      }
+    ],
+    "3.1 Implement compact analysis summarization and deterministic file ranking.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365820556
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366119544
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366156010
+      }
+    ],
+    "3.2 Implement finding projection for static and AI-derived material.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365820610
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366162018
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366212791
+      }
+    ],
+    "3.3 Implement exact-string cache helpers for successful replacement, failed-refresh preservation, exact URL isolation, node lookup, and missing URL/path errors.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365820664
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366223731
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366265362
+      }
+    ],
+    "3.4 Write Vitest tests for summarization, finding projection, and cache transitions.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365820731
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366325457
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366379406
+      }
+    ],
+    "4.1 Implement `scan_code` as a thin adapter over the shared `scanSource(path, code)` function.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365820787
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366162115
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366213363
+      }
+    ],
+    "4.2 Implement patch response shape validation and pure derivation of `edits` and `verification`.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365820841
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366269397
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366312803
+      }
+    ],
+    "4.3 Write Vitest scanner-parity tests against representative TypeScript, JavaScript, Python, and Go inputs.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365820908
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366326242
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366377818
+      }
+    ],
+    "4.4 Write Vitest patch-derivation tests for accepted changes, changed code with remaining findings, unchanged fallback, empty fixed/remaining arrays, and malformed endpoint responses.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365820964
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366326976
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366378838
+      }
+    ],
+    "5.1 Implement base URL resolution and bounded JSON POST helpers for `/api/ingest` and `/api/patch`.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365821020
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366384427
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366445743
+      }
+    ],
+    "5.2 Implement actionable error classification for validation, invalid/non-GitHub URL, unavailable Next application, timeout/network failure, GitHub rate limit, repository access failure, and unexpected ingest/patch shapes.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365821097
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366446552
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366504678
+      }
+    ],
+    "5.3 Write Vitest proxy tests with mocked `fetch` for direct ingest success, cache-after-validation, failed refresh preservation, patch forwarding, malformed responses, HTTP failures, rate limiting, and unavailable Next.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365821154
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366509518
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366559374
+      }
+    ],
+    "6.1 Create `mcp/server.ts` with the SDK `Server`, exactly four registered tools, strict schemas, concise structured/text results, and handlers wired to the helpers and proxy boundaries.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365821209
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366564525
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366644975
+      }
+    ],
+    "6.2 Connect the server through `StdioServerTransport` from the `npx tsx mcp/server.ts` entry point without creating an HTTP, SSE, or other listener.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365821265
+      },
+      {
+        "executionId": "10314249-1472-46a4-98e8-daaf8260118a",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795367041195
+      },
+      {
+        "executionId": "10314249-1472-46a4-98e8-daaf8260118a",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795367296671
+      }
+    ],
+    "6.3 Write Vitest handler tests for the exact tool set, validation-before-side-effects, cache behavior, scanner delegation, proxy forwarding, compact output, and patch no-mutation guarantees.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365821324
+      },
+      {
+        "executionId": "10314249-1472-46a4-98e8-daaf8260118a",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795367041449
+      },
+      {
+        "executionId": "10314249-1472-46a4-98e8-daaf8260118a",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795367296755
+      }
+    ],
+    "7.1 Create `.kiro/settings/mcp.json` registering `necro-docs` with command `npx`, args `tsx mcp/server.ts`, repository-root working context, and optional `NECRO_API_URL`.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365821379
+      },
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366654283
+      },
+      {
+        "executionId": "10314249-1472-46a4-98e8-daaf8260118a",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795367036413
+      }
+    ],
+    "7.2 Add an MCP Inspector smoke script or test fixture that starts `npx tsx mcp/server.ts` from the repository root and checks registration of exactly four tools.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365821439
+      },
+      {
+        "executionId": "10314249-1472-46a4-98e8-daaf8260118a",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795367041530
+      },
+      {
+        "executionId": "10314249-1472-46a4-98e8-daaf8260118a",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795367296960
+      }
+    ],
+    "7.3 Run the MCP Inspector smoke check with a running Next application and verify `analyze_repo` then `get_findings`, `scan_code`, and `synthesize_patch` against fixtures.": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365821507
+      },
+      {
+        "executionId": "10314249-1472-46a4-98e8-daaf8260118a",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795367301054
+      },
+      {
+        "executionId": "10314249-1472-46a4-98e8-daaf8260118a",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795367399775
+      }
+    ],
+    "8. Checkpoint - Ensure all tests pass": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365821561
+      },
+      {
+        "executionId": "10314249-1472-46a4-98e8-daaf8260118a",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795367403515
+      },
+      {
+        "executionId": "10314249-1472-46a4-98e8-daaf8260118a",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795367590426
+      }
+    ],
+    "1. Prepare MCP server prerequisites and test seams": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795365986106
+      }
+    ],
+    "4. Implement scanner and patch-verification adapters": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366378923
+      }
+    ],
+    "3. Implement pure analysis, finding, and cache helpers": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366379481
+      }
+    ],
+    "2. Implement and test Zod tool schemas": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366380181
+      }
+    ],
+    "5. Implement safe Next application proxy and error mapping": [
+      {
+        "executionId": "89e761d2-c8c2-4ebd-8518-9ae8a63fa63d",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795366559460
+      }
+    ],
+    "6. Implement the four MCP tools and stdio server entry point": [
+      {
+        "executionId": "10314249-1472-46a4-98e8-daaf8260118a",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795367296817
+      }
+    ],
+    "7. Register MCP settings and verify the integration boundary": [
+      {
+        "executionId": "10314249-1472-46a4-98e8-daaf8260118a",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795367399835
+      }
+    ],
+    "9.1 Update `PatchResult`, `derivePatchResult`, the MCP server handler, and tests so `patchedCode` is included only when `verification.changed` is true and omitted for unchanged results; preserve proposal-only behavior and no file, branch, commit, or pull-request mutation.": [
+      {
+        "executionId": "04ea9822-aad1-47ad-8f45-6a5dc4cdf91e",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795401639104
+      },
+      {
+        "executionId": "04ea9822-aad1-47ad-8f45-6a5dc4cdf91e",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795401859804
+      }
+    ],
+    "9.2 Normalize analysis cache keys to lowercase `owner/repo` using the existing `parseGitHubUrl()` helper in `analyze_repo` and `get_findings`; preserve the invalid-URL error and update cache and property tests for equivalent URLs, replacement, failure preservation, isolation, and missing entries.": [
+      {
+        "executionId": "04ea9822-aad1-47ad-8f45-6a5dc4cdf91e",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795401861047
+      },
+      {
+        "executionId": "04ea9822-aad1-47ad-8f45-6a5dc4cdf91e",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795402272034
+      }
+    ],
+    "9.3 Update `.kiro/settings/mcp.json` so `autoApprove` contains exactly `analyze_repo`, `get_findings`, and `scan_code`; add or update a configuration test if one exists, without approving `synthesize_patch`.": [
+      {
+        "executionId": "04ea9822-aad1-47ad-8f45-6a5dc4cdf91e",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795402272332
+      },
+      {
+        "executionId": "04ea9822-aad1-47ad-8f45-6a5dc4cdf91e",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795402763566
+      }
+    ],
+    "9. Implement requested MCP contract corrections": [
+      {
+        "executionId": "04ea9822-aad1-47ad-8f45-6a5dc4cdf91e",
+        "chatSessionId": "sess_58c05060-b5e0-497f-9cd7-28e47b051134",
+        "timestamp": 1795402763629
+      }
+    ]
+  }
+}

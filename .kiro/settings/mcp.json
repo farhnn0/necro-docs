@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "necro-docs": {
+      "command": "npx",
+      "args": ["tsx", "mcp/server.ts"],
+      "env": { "NECRO_API_URL": "http://localhost:3000" },
+      "disabled": false,
+      "autoApprove": ["analyze_repo", "get_findings", "scan_code"]
+    }
+  }
+}

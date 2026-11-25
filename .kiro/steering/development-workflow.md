@@ -1,5 +1,7 @@
 # Necro-Docs: Development Workflow & Best Practices
 
+> Current implementation note: read `.kiro/steering/current-architecture.md` before changing the analyzer, graph scope, Voice Séance, Surgical Patch, or GitHub PR flow.
+
 ## Project Setup & Initialization
 
 ### Environment Preparation

@@ -1,8 +1,25 @@
 # Necro-Docs: Steering Documentation Guide
 
-Welcome to the Necro-Docs steering documentation. This folder contains comprehensive guides for developing Necro-Docs, an AI Codebase Archaeologist & Interactive Voice Debugger for the Kiroween Hackathon (Frankenstein Category).
+Welcome to the Necro-Docs steering documentation. **Start with `current-architecture.md`** for the current implementation contract. The older guides remain useful for patterns and examples, but current architecture, analyzer coverage, graph scope, and PR behavior are defined there.
 
-## 📚 Documentation Files
+Necro-Docs is an AI Codebase Archaeologist & Interactive Voice Debugger for the Kiroween Hackathon (Frankenstein Category).
+
+## 0. **current-architecture.md** - Current Product and Engineering Contract
+
+**Read this first.** It reflects the shipped application rather than the original MVP examples.
+
+It covers:
+- GitHub ingestion up to the current safety budget
+- Static analysis for all analyzed files and AI explanations for featured files
+- TypeScript/JavaScript AST context scanning
+- Key files, revealed files, and all-files graph scope
+- Search debounce and progressive graph reveal
+- Voice Séance and normalized TTS
+- Surgical Patch and GitHub Pull Request workflow
+- Current security, accessibility, testing, and build rules
+
+If an older guide conflicts with this file, follow `current-architecture.md`.
+## Documentation Files
 
 ### 1. **necro-docs-guide.md** - Project Overview & Architecture
 The master guide covering project vision, tech stack, and directory structure.

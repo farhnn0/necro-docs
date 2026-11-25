@@ -183,23 +183,59 @@ export function readActiveRepo(raw: string | null, repo: string): RepoAnalysis |
   }
 }
 
-export function ingestErrorMessage(code?: string): string {
+export interface IngestErrorHelp {
+  title: string;
+  message: string;
+  /** What the user can do about it. */
+  hint?: string;
+  /** A private repository may become readable after installing the GitHub App. */
+  connectGithub?: boolean;
+}
+
+function rateLimitHint(details: Record<string, unknown> | null | undefined, now: number): string {
+  const resetAt = typeof details?.resetAt === 'string' ? Date.parse(details.resetAt) : NaN;
+  const waitMs = Number.isFinite(resetAt) ? resetAt - now : typeof details?.retryAfter === 'number' ? details.retryAfter * 1000 : NaN;
+  const when = waitMs > 0 ? `The limit resets in about ${Math.ceil(waitMs / 60_000)} min. ` : '';
+  return `${when}A GITHUB_TOKEN on the server raises the limit from 60 to 5,000 requests per hour.`;
+}
+
+/** Turns an /api/ingest error code (or the client-only NETWORK_ERROR) into user-facing copy. */
+export function ingestErrorHelp(code?: string, details?: Record<string, unknown> | null, now = Date.now()): IngestErrorHelp {
   switch (code) {
-    case 'INVALID_URL_FORMAT': case 'MISSING_REPOSITORY_URL': return 'Enter a GitHub URL like github.com/owner/repo.';
-    case 'NON_GITHUB_REPOSITORY': return 'Only github.com repositories are supported.';
-    case 'REPOSITORY_NOT_FOUND': return 'That repository does not exist or is private.';
-    case 'NO_CODE_FILES_FOUND': return 'No TypeScript, JavaScript, Python, or Go files were found.';
-    case 'GITHUB_RATE_LIMIT': return "GitHub's rate limit was reached. Try again later, or open a sample specimen.";
-    case 'REQUEST_TIMEOUT': return 'The analysis timed out.';
-    case 'GITHUB_API_ERROR': case 'GITHUB_SERVICE_UNAVAILABLE': return 'GitHub is unavailable.';
-    default: return 'The repository could not be analyzed. Try again later.';
+    case 'INVALID_URL_FORMAT': case 'MISSING_REPOSITORY_URL': case 'INVALID_REQUEST':
+      return { title: 'Check the repository URL', message: 'Enter a GitHub URL like github.com/owner/repo.', hint: 'The short form owner/repo works too.' };
+    case 'NON_GITHUB_REPOSITORY':
+      return { title: 'Only GitHub is supported', message: 'Only github.com repositories are supported.', hint: 'GitLab and Bitbucket repositories cannot be analyzed yet.' };
+    case 'REPOSITORY_NOT_FOUND':
+      return { title: 'Repository not found', message: 'That repository does not exist or is private.', hint: 'If it is private, connect the GitHub App so Necro-Docs can read it.', connectGithub: true };
+    case 'NO_CODE_FILES_FOUND':
+      return { title: 'No supported source files', message: 'No TypeScript, JavaScript, Python, or Go files were found.', hint: 'Necro-Docs reads .ts, .tsx, .js, .jsx, .mjs, .cjs, .py and .go files. Vue, Svelte and other languages are not analyzed yet.' };
+    case 'GITHUB_RATE_LIMIT':
+      return { title: 'GitHub rate limit reached', message: "GitHub's rate limit was reached. Try again later, or open a sample specimen.", hint: rateLimitHint(details, now) };
+    case 'INVALID_GITHUB_TOKEN':
+      return { title: 'GitHub token rejected', message: 'GitHub rejected the server token.', hint: 'Update GITHUB_TOKEN in .env.local, then restart the server.' };
+    case 'REQUEST_TIMEOUT':
+      return { title: 'Analysis timed out', message: 'The analysis timed out.', hint: 'Large repositories take longer to read. Try again, or open a sample specimen.' };
+    case 'GITHUB_API_ERROR': case 'GITHUB_SERVICE_UNAVAILABLE':
+      return { title: 'GitHub is unavailable', message: 'GitHub is unavailable.', hint: 'Check githubstatus.com, then try again.' };
+    case 'NETWORK_ERROR':
+      return { title: 'Server unreachable', message: 'The server could not be reached.', hint: 'Check your connection and that the Necro-Docs server is running.' };
+    default:
+      return { title: 'Analysis failed', message: 'The repository could not be analyzed. Try again later.' };
   }
 }
 
-export function createIngestErrorState(code?: string, repository?: string): IngestErrorState {
-  return { status: 'error', code, repository, message: ingestErrorMessage(code) };
+export function ingestErrorMessage(code?: string): string {
+  return ingestErrorHelp(code).message;
 }
 
+export function createIngestErrorState(code?: string, repository?: string, details?: Record<string, unknown> | null): IngestErrorState {
+  return { status: 'error', code, repository, ...ingestErrorHelp(code, details) };
+}
+
+/** The analysis is one request, so these stages are paced by time while it runs. */
+export const INGEST_STAGES = ['Resolving default branch', 'Fetching file tree', 'Reading source files', 'Scanning imports and code rot'] as const;
+export const INGEST_STAGE_INTERVAL_MS = 1100;
 export const SLOW_INGEST_DELAY_MS = 8000;
 export function shouldShowSlowIngest(elapsedMs: number): boolean { return elapsedMs >= SLOW_INGEST_DELAY_MS; }
 
